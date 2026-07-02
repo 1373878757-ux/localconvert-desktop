@@ -12,11 +12,29 @@
   "app": {
     "windows": [
       {
+        "label": "main",
+        "url": "index.html",
         "title": "LocalConvert Desktop",
         "width": 1120,
         "height": 760,
         "minWidth": 920,
         "minHeight": 620,
+        "visible": false,
+        "dragDropEnabled": false
+      },
+      {
+        "label": "splashscreen",
+        "url": "splash.html",
+        "title": "LocalConvert Desktop",
+        "width": 420,
+        "height": 250,
+        "center": true,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": false,
+        "decorations": false,
+        "shadow": true,
+        "skipTaskbar": true,
         "dragDropEnabled": false
       }
     ],

@@ -3,15 +3,20 @@ use std::{
     collections::HashSet,
     fs,
     path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+    thread,
+    time::{Duration, Instant},
 };
+use tauri::Manager;
 
 mod qpdf;
 
 const DEFAULT_OUTPUT_STRATEGY: &str = "converted-folder-next-to-source";
 const COLLISION_STRATEGY_EXPLANATION: &str =
     "Creates a converted folder next to the source file and appends (1), (2), ... when a filename already exists.";
+const MIN_SPLASH_DISPLAY_TIME: Duration = Duration::from_millis(800);
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct EngineSelfCheck {
     platform: String,
@@ -20,13 +25,56 @@ struct EngineSelfCheck {
     engines: Vec<EngineStatus>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct EngineStatus {
     name: &'static str,
     status: &'static str,
     required_for_v1: bool,
     message: String,
+}
+
+#[derive(Clone, Default)]
+struct StartupState {
+    status: Arc<Mutex<StartupStatus>>,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StartupStatus {
+    completed: bool,
+    self_check: Option<EngineSelfCheck>,
+    error: Option<String>,
+}
+
+impl StartupState {
+    fn snapshot(&self) -> StartupStatus {
+        self.status
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    fn complete(&self, self_check: Option<EngineSelfCheck>, error: Option<String>) {
+        let mut status = self
+            .status
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        status.completed = true;
+        status.self_check = self_check;
+        status.error = error;
+    }
+
+    fn record_error(&self, message: String) {
+        let mut status = self
+            .status
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        status.error = Some(match status.error.take() {
+            Some(existing) => format!("{existing}\n{message}"),
+            None => message,
+        });
+    }
 }
 
 #[derive(Deserialize)]
@@ -50,6 +98,15 @@ struct OutputPathPlan {
 
 #[tauri::command]
 fn engine_self_check() -> EngineSelfCheck {
+    build_engine_self_check()
+}
+
+#[tauri::command]
+fn startup_status(startup_state: tauri::State<'_, StartupState>) -> StartupStatus {
+    startup_state.snapshot()
+}
+
+fn build_engine_self_check() -> EngineSelfCheck {
     let platform = current_platform_key();
     let qpdf_status = qpdf::detect_qpdf_engine(&platform);
 
@@ -255,8 +312,20 @@ fn path_to_string(path: &Path) -> String {
 
 pub fn run() {
     tauri::Builder::default()
+        .manage(StartupState::default())
+        .setup(|app| {
+            let startup_state = app.state::<StartupState>().inner().clone();
+            let app_handle = app.handle().clone();
+
+            thread::spawn(move || {
+                run_startup_sequence(startup_state, app_handle);
+            });
+
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             engine_self_check,
+            startup_status,
             plan_output_path,
             qpdf::qpdf_merge_pdfs,
             qpdf::qpdf_split_pdf,
@@ -265,6 +334,53 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("failed to run LocalConvert Desktop");
+}
+
+fn run_startup_sequence(startup_state: StartupState, app_handle: tauri::AppHandle) {
+    let started_at = Instant::now();
+    let self_check_result = std::panic::catch_unwind(build_engine_self_check);
+
+    match self_check_result {
+        Ok(self_check) => startup_state.complete(Some(self_check), None),
+        Err(_) => startup_state.complete(
+            None,
+            Some("Startup initialization failed during engine self-check.".to_string()),
+        ),
+    }
+
+    if let Some(remaining) = MIN_SPLASH_DISPLAY_TIME.checked_sub(started_at.elapsed()) {
+        thread::sleep(remaining);
+    }
+
+    let startup_state_for_ui = startup_state.clone();
+    let app_handle_for_ui = app_handle.clone();
+    if let Err(error) = app_handle.run_on_main_thread(move || {
+        match app_handle_for_ui.get_webview_window("main") {
+            Some(window) => {
+                if let Err(error) = window.show() {
+                    startup_state_for_ui
+                        .record_error(format!("Unable to show main window: {error}"));
+                }
+                if let Err(error) = window.set_focus() {
+                    startup_state_for_ui
+                        .record_error(format!("Unable to focus main window: {error}"));
+                }
+            }
+            None => startup_state_for_ui
+                .record_error("Main window was not available at startup.".to_string()),
+        };
+
+        if let Some(window) = app_handle_for_ui.get_webview_window("splashscreen") {
+            if let Err(error) = window.close() {
+                startup_state_for_ui
+                    .record_error(format!("Unable to close splash screen: {error}"));
+            }
+        }
+    }) {
+        startup_state.record_error(format!(
+            "Unable to schedule startup window handoff: {error}"
+        ));
+    }
 }
 
 #[cfg(test)]

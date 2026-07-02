@@ -217,7 +217,7 @@ Office rendering can differ from the source application's native output. The v1 
 
 ## Development Setup
 
-This repository includes a minimal Tauri v2, React, and TypeScript app scaffold for LocalConvert Desktop. The current implementation includes the file-intake and task-queue UI, backend output path planning, the bundled macOS Apple Silicon qpdf sidecar, qpdf engine self-check, and real local PDF merge, split, page extraction, and rotate execution only. Office conversion, PDFium rasterization, and image conversion remain disabled until intentionally enabled in later implementation steps.
+This repository includes a minimal Tauri v2, React, and TypeScript app scaffold for LocalConvert Desktop. The current implementation includes a branded startup splash screen, file-intake and task-queue UI, backend output path planning, the bundled macOS Apple Silicon qpdf sidecar, startup qpdf engine self-check, and real local PDF merge, split, page extraction, and rotate execution only. Office conversion, PDFium rasterization, and image conversion remain disabled until intentionally enabled in later implementation steps.
 
 Development machines need the normal Tauri v2 toolchain requirements for the target platform, including Node.js, npm, Rust, Cargo, and platform-specific build dependencies.
 

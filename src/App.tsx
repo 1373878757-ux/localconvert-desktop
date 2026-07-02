@@ -30,6 +30,12 @@ type EngineSelfCheck = {
   engines: EngineStatus[];
 };
 
+type StartupStatus = {
+  completed: boolean;
+  selfCheck: EngineSelfCheck | null;
+  error: string | null;
+};
+
 type OutputPathPlan = {
   sourceDisplayName: string;
   targetExtension: string;
@@ -155,6 +161,7 @@ function App() {
   const [activeTool, setActiveTool] = useState("PDF Tools");
   const [dragActive, setDragActive] = useState(false);
   const [folderMessage, setFolderMessage] = useState("");
+  const [startupError, setStartupError] = useState("");
   const [extractPageRange, setExtractPageRange] = useState("");
   const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(
     () => new Set()
@@ -164,9 +171,27 @@ function App() {
   useEffect(() => {
     async function loadSelfCheck() {
       try {
+        const startup = await invoke<StartupStatus>("startup_status");
+        if (startup.error) {
+          setStartupError(startup.error);
+        }
+        if (startup.selfCheck) {
+          setSelfCheck(startup.selfCheck);
+          return;
+        }
+        if (startup.completed) {
+          setSelfCheck(fallbackSelfCheck);
+          return;
+        }
+      } catch {
+        // Fall back to the direct command for development builds that predate startup status.
+      }
+
+      try {
         setSelfCheck(await invoke<EngineSelfCheck>("engine_self_check"));
       } catch {
         setSelfCheck(fallbackSelfCheck);
+        setStartupError("Startup status and engine self-check were unavailable.");
       }
     }
 
@@ -192,6 +217,9 @@ function App() {
   );
 
   const selectedTaskWithError = tasks.find((task) => task.errorLog);
+  const inspectorErrorLog =
+    selectedTaskWithError?.errorLog ||
+    (startupError ? `Startup initialization issue:\n${startupError}` : "");
   const qpdfEngine = selfCheck.engines.find((engine) => engine.name === "qpdf");
   const qpdfAvailable = qpdfEngine?.status === "available";
   const realLocalPdfTasks = tasks.filter(
@@ -1152,9 +1180,11 @@ function App() {
           <section className="inspector-card">
             <h2>Engine status</h2>
             <p>
-              {qpdfAvailable
-                ? "PDF merge, split, page extraction, and rotate are enabled locally with bundled qpdf. Other conversions remain disabled."
-                : "Conversion engines are not bundled yet."}
+              {startupError
+                ? `Startup initialization reported an issue: ${startupError}`
+                : qpdfAvailable
+                  ? "PDF merge, split, page extraction, and rotate are enabled locally with bundled qpdf. Other conversions remain disabled."
+                  : "Conversion engines are not bundled yet."}
             </p>
             <dl className="engine-list">
               {selfCheck.engines.map((engine) => (
@@ -1169,7 +1199,7 @@ function App() {
           <section className="inspector-card">
             <h2>Error log</h2>
             <pre className="log-box">
-              {selectedTaskWithError?.errorLog ||
+              {inspectorErrorLog ||
                 "No error log. Failed PDF merge, split, page extraction, rotate, or demo tasks appear here."}
             </pre>
           </section>
