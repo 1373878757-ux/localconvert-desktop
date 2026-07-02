@@ -265,6 +265,18 @@ The packaging process should include a post-install smoke test pass that confirm
 
 Before a release, verify these scenarios on a clean install.
 
+Current qpdf PDF tools checklist:
+
+- Merge two or more PDFs and confirm a single output PDF is written to the source-adjacent `converted` folder.
+- Split one multi-page PDF and confirm the split output PDFs are written only to `converted`.
+- Rotate one PDF left 90, right 90, and 180 degrees, confirming each output PDF is readable.
+- Extract selected pages such as `1,3,5-7` and confirm the output page count matches the selected pages.
+- Repeat at least one operation with a Chinese filename.
+- Repeat at least one operation from a folder path containing spaces.
+- Repeat at least one operation when the planned output name already exists and confirm auto-incremented collision naming.
+- Hash or otherwise compare source files before and after each operation and confirm sources are unchanged.
+- Confirm Office, image, PDF rasterization, and preview tools remain disabled until their bundled engines are intentionally added.
+
 Office-to-PDF:
 
 - Convert a DOCX file to PDF.

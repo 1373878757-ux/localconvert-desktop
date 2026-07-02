@@ -127,12 +127,12 @@ const fallbackSelfCheck: EngineSelfCheck = {
 };
 
 const toolCategories = [
-  "Documents to PDF",
-  "Image Conversion",
-  "Image Compression",
-  "Images to PDF",
-  "PDF Tools",
-  "Batch Queue"
+  { label: "PDF Tools", enabled: true, note: "Enabled" },
+  { label: "Batch Queue", enabled: true, note: "Local" },
+  { label: "Documents to PDF", enabled: false, note: "Later" },
+  { label: "Image Conversion", enabled: false, note: "Later" },
+  { label: "Image Compression", enabled: false, note: "Later" },
+  { label: "Images to PDF", enabled: false, note: "Later" }
 ];
 
 const statusLabels: Record<TaskStatus, string> = {
@@ -152,10 +152,13 @@ const outputNameExample = [
 function App() {
   const [selfCheck, setSelfCheck] = useState<EngineSelfCheck>(fallbackSelfCheck);
   const [tasks, setTasks] = useState<LocalTask[]>([]);
-  const [activeTool, setActiveTool] = useState("Batch Queue");
+  const [activeTool, setActiveTool] = useState("PDF Tools");
   const [dragActive, setDragActive] = useState(false);
   const [folderMessage, setFolderMessage] = useState("");
-  const [extractPageRanges, setExtractPageRanges] = useState<Record<string, string>>({});
+  const [extractPageRange, setExtractPageRange] = useState("");
+  const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(
+    () => new Set()
+  );
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -197,10 +200,40 @@ function App() {
       Boolean(task.sourcePath) &&
       task.status !== "cancelled"
   );
-  const canMergePdfs =
+  const selectedTasks = useMemo(
+    () => tasks.filter((task) => selectedTaskIds.has(task.id)),
+    [selectedTaskIds, tasks]
+  );
+  const selectedPdfTasks = selectedTasks.filter((task) => task.extension === "pdf");
+  const selectedNonPdfTasks = selectedTasks.filter((task) => task.extension !== "pdf");
+  const selectedPdfTasksWithoutPath = selectedPdfTasks.filter(
+    (task) => !task.sourcePath
+  );
+  const selectedCancelledPdfTasks = selectedPdfTasks.filter(
+    (task) => task.status === "cancelled"
+  );
+  const selectedRealLocalPdfTasks = selectedPdfTasks.filter(
+    (task) => Boolean(task.sourcePath) && task.status !== "cancelled"
+  );
+  const selectedSinglePdfTask =
+    selectedRealLocalPdfTasks.length === 1 ? selectedRealLocalPdfTasks[0] : undefined;
+  const selectedHasConvertingTask = selectedRealLocalPdfTasks.some(
+    (task) => task.status === "converting"
+  );
+  const canMergeSelectedPdfs =
     qpdfAvailable &&
-    realLocalPdfTasks.length >= 2 &&
-    realLocalPdfTasks.every((task) => task.status !== "converting");
+    selectedNonPdfTasks.length === 0 &&
+    selectedPdfTasksWithoutPath.length === 0 &&
+    selectedRealLocalPdfTasks.length >= 2 &&
+    !selectedHasConvertingTask;
+  const canRunSelectedSinglePdfTool =
+    qpdfAvailable &&
+    selectedNonPdfTasks.length === 0 &&
+    selectedPdfTasksWithoutPath.length === 0 &&
+    selectedRealLocalPdfTasks.length === 1 &&
+    !selectedHasConvertingTask;
+  const canExtractSelectedPages =
+    canRunSelectedSinglePdfTool && extractPageRange.trim().length > 0;
 
   async function planBackendOutput(task: LocalTask) {
     if (!task.sourcePath) {
@@ -334,6 +367,58 @@ function App() {
     return canSplitPdfTask(task);
   }
 
+  function toggleTaskSelection(taskId: string) {
+    setSelectedTaskIds((currentIds) => {
+      const nextIds = new Set(currentIds);
+      if (nextIds.has(taskId)) {
+        nextIds.delete(taskId);
+      } else {
+        nextIds.add(taskId);
+      }
+      return nextIds;
+    });
+  }
+
+  function selectPdfTasks() {
+    setSelectedTaskIds(
+      new Set(tasks.filter((task) => task.extension === "pdf").map((task) => task.id))
+    );
+  }
+
+  function clearTaskSelection() {
+    setSelectedTaskIds(new Set());
+  }
+
+  function pdfToolsGuidance() {
+    if (!qpdfAvailable) {
+      return "Bundled qpdf is unavailable. PDF tools stay disabled until the local sidecar passes self-check.";
+    }
+
+    if (selectedTasks.length === 0) {
+      return "Select PDF tasks in the queue to enable local PDF tools.";
+    }
+
+    if (selectedNonPdfTasks.length > 0) {
+      return "Only PDF tasks can use the current qpdf tools. Office and image conversions are not enabled yet.";
+    }
+
+    if (selectedPdfTasksWithoutPath.length > 0) {
+      return "Some selected PDFs only have display metadata. qpdf tools need a real local file path from the desktop app.";
+    }
+
+    if (selectedCancelledPdfTasks.length > 0) {
+      return "Cancelled PDF tasks cannot run qpdf operations. Retry or remove them before using PDF tools.";
+    }
+
+    if (selectedHasConvertingTask) {
+      return "A selected PDF is already running. Wait for it to finish before starting another qpdf operation.";
+    }
+
+    return `${selectedRealLocalPdfTasks.length} local PDF task${
+      selectedRealLocalPdfTasks.length === 1 ? "" : "s"
+    } selected. Merge needs 2 or more; split, rotate, and extract need exactly 1.`;
+  }
+
   function addFiles(fileList: FileList | File[]) {
     const files = Array.from(fileList);
     if (files.length === 0) {
@@ -375,25 +460,6 @@ function App() {
     addFiles(event.dataTransfer.files);
   }
 
-  function updateTaskStatus(taskId: string, status: TaskStatus) {
-    setTasks((currentTasks) =>
-      currentTasks.map((task) => {
-        if (task.id !== taskId) {
-          return task;
-        }
-
-        return {
-          ...task,
-          status,
-          errorLog:
-            status === "failed"
-              ? "Demo failure log only. No conversion process was started and no file contents were read."
-              : task.errorLog
-        };
-      })
-    );
-  }
-
   function retryTask(taskId: string) {
     setTasks((currentTasks) =>
       currentTasks.map((task) =>
@@ -425,20 +491,33 @@ function App() {
     setTasks((currentTasks) =>
       currentTasks.filter((task) => task.id !== taskId)
     );
+    setSelectedTaskIds((currentIds) => {
+      const nextIds = new Set(currentIds);
+      nextIds.delete(taskId);
+      return nextIds;
+    });
   }
 
   function clearCompletedTasks() {
+    const completedTaskIds = new Set(
+      tasks.filter((task) => task.status === "completed").map((task) => task.id)
+    );
     setTasks((currentTasks) =>
       currentTasks.filter((task) => task.status !== "completed")
     );
+    setSelectedTaskIds((currentIds) => {
+      const nextIds = new Set(currentIds);
+      for (const taskId of completedTaskIds) {
+        nextIds.delete(taskId);
+      }
+      return nextIds;
+    });
   }
 
   async function mergePdfTasks() {
-    const mergeTasks = realLocalPdfTasks;
-    if (!qpdfAvailable || mergeTasks.length < 2) {
-      setFolderMessage(
-        "PDF merge requires bundled qpdf and at least two local PDF files with real paths."
-      );
+    const mergeTasks = selectedRealLocalPdfTasks;
+    if (!canMergeSelectedPdfs) {
+      setFolderMessage(pdfToolsGuidance());
       return;
     }
 
@@ -491,8 +570,8 @@ function App() {
       );
       setFolderMessage(
         result.success
-          ? `PDF merge completed locally: ${result.outputPath}`
-          : "PDF merge failed locally. See the error log."
+          ? `Merged ${mergeTasks.length} PDFs locally. Output: ${result.outputPath}`
+          : "PDF merge failed locally. Check the failed task error log."
       );
     } catch (error) {
       const message =
@@ -508,7 +587,7 @@ function App() {
             : task
         )
       );
-      setFolderMessage("PDF merge failed locally. See the error log.");
+      setFolderMessage("PDF merge failed locally. Check the failed task error log.");
     }
   }
 
@@ -559,8 +638,8 @@ function App() {
       );
       setFolderMessage(
         result.success
-          ? `PDF split completed locally: ${result.outputPaths.length} files in ${result.outputDirectory}`
-          : "PDF split failed locally. See the error log."
+          ? `Split PDF locally into ${result.outputPaths.length} files: ${result.outputPaths.join(" | ")}`
+          : "PDF split failed locally. Check the failed task error log."
       );
     } catch (error) {
       const message =
@@ -576,7 +655,7 @@ function App() {
             : currentTask
         )
       );
-      setFolderMessage("PDF split failed locally. See the error log.");
+      setFolderMessage("PDF split failed locally. Check the failed task error log.");
     }
   }
 
@@ -588,7 +667,7 @@ function App() {
       return;
     }
 
-    const pages = (extractPageRanges[task.id] || "").trim();
+    const pages = extractPageRange.trim();
     if (!pages) {
       setFolderMessage("Enter a page range before extracting pages, for example 1,3,5-7.");
       return;
@@ -641,8 +720,8 @@ function App() {
       );
       setFolderMessage(
         result.success
-          ? `PDF page extraction completed locally: ${result.outputPath}`
-          : "PDF page extraction failed locally. See the error log."
+          ? `Extracted pages ${result.pages} locally. Output: ${result.outputPath}`
+          : "PDF page extraction failed locally. Check the failed task error log."
       );
     } catch (error) {
       const message =
@@ -658,7 +737,7 @@ function App() {
             : currentTask
         )
       );
-      setFolderMessage("PDF page extraction failed locally. See the error log.");
+      setFolderMessage("PDF page extraction failed locally. Check the failed task error log.");
     }
   }
 
@@ -718,8 +797,8 @@ function App() {
       );
       setFolderMessage(
         result.success
-          ? `PDF rotate completed locally: ${result.outputPath}`
-          : "PDF rotate failed locally. See the error log."
+          ? `Rotated PDF locally (${result.degrees}). Output: ${result.outputPath}`
+          : "PDF rotate failed locally. Check the failed task error log."
       );
     } catch (error) {
       const message =
@@ -735,7 +814,7 @@ function App() {
             : currentTask
         )
       );
-      setFolderMessage("PDF rotate failed locally. See the error log.");
+      setFolderMessage("PDF rotate failed locally. Check the failed task error log.");
     }
   }
 
@@ -762,17 +841,24 @@ function App() {
             {toolCategories.map((tool) => (
               <button
                 type="button"
-                className={activeTool === tool ? "tool-item is-active" : "tool-item"}
-                key={tool}
-                onClick={() => setActiveTool(tool)}
+                className={activeTool === tool.label ? "tool-item is-active" : "tool-item"}
+                key={tool.label}
+                onClick={() => setActiveTool(tool.label)}
+                disabled={!tool.enabled}
+                title={
+                  tool.enabled
+                    ? `${tool.label} is available in this preview.`
+                    : `${tool.label} is not enabled yet.`
+                }
               >
-                {tool}
+                <span>{tool.label}</span>
+                <small>{tool.note}</small>
               </button>
             ))}
           </nav>
           <div className="sidebar-note">
-            <strong>Desktop full edition</strong>
-            <span>Windows x64 and macOS Apple Silicon are the v1 targets.</span>
+            <strong>PDF tools preview</strong>
+            <span>Only qpdf PDF tools are enabled. Office and image tools remain off.</span>
           </div>
         </aside>
 
@@ -849,26 +935,127 @@ function App() {
             ))}
           </section>
 
+          <section className="pdf-tools-panel" aria-label="PDF tools">
+            <div className="pdf-tools-header">
+              <div>
+                <p className="section-kicker">PDF Tools</p>
+                <h2>Local qpdf tools</h2>
+                <p>Files stay on this computer. PDF tools use bundled qpdf.</p>
+              </div>
+              <div className="selection-tools">
+                <button type="button" className="secondary-button" onClick={selectPdfTasks}>
+                  Select PDFs
+                </button>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={clearTaskSelection}
+                  disabled={selectedTasks.length === 0}
+                >
+                  Clear selection
+                </button>
+              </div>
+            </div>
+
+            <div className="pdf-tools-status">
+              <strong>
+                {selectedTasks.length} selected · {selectedRealLocalPdfTasks.length} usable local PDFs
+              </strong>
+              <span>{pdfToolsGuidance()}</span>
+            </div>
+
+            <div className="pdf-tool-grid">
+              <article className="pdf-tool-card">
+                <h3>Merge selected PDFs</h3>
+                <p>Requires 2 or more selected PDFs with real local paths.</p>
+                <button
+                  type="button"
+                  onClick={() => void mergePdfTasks()}
+                  disabled={!canMergeSelectedPdfs}
+                >
+                  Merge selected PDFs
+                </button>
+              </article>
+
+              <article className="pdf-tool-card">
+                <h3>Split selected PDF</h3>
+                <p>Requires exactly 1 selected PDF with a real local path.</p>
+                <button
+                  type="button"
+                  onClick={() => selectedSinglePdfTask && void splitPdfTask(selectedSinglePdfTask)}
+                  disabled={!canRunSelectedSinglePdfTool}
+                >
+                  Split selected PDF
+                </button>
+              </article>
+
+              <article className="pdf-tool-card">
+                <h3>Rotate selected PDF</h3>
+                <p>Requires exactly 1 selected PDF. Choose left, right, or 180.</p>
+                <div className="segmented-actions">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      selectedSinglePdfTask && void rotatePdfTask(selectedSinglePdfTask, -90)
+                    }
+                    disabled={!canRunSelectedSinglePdfTool}
+                  >
+                    Left 90
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      selectedSinglePdfTask && void rotatePdfTask(selectedSinglePdfTask, 90)
+                    }
+                    disabled={!canRunSelectedSinglePdfTool}
+                  >
+                    Right 90
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      selectedSinglePdfTask && void rotatePdfTask(selectedSinglePdfTask, 180)
+                    }
+                    disabled={!canRunSelectedSinglePdfTool}
+                  >
+                    180
+                  </button>
+                </div>
+              </article>
+
+              <article className="pdf-tool-card">
+                <h3>Extract pages from selected PDF</h3>
+                <p>Requires exactly 1 selected PDF and a page range.</p>
+                <div className="extract-panel-control">
+                  <input
+                    aria-label="Pages to extract from selected PDF"
+                    className="page-range-input"
+                    placeholder="1,3,5-7"
+                    value={extractPageRange}
+                    onChange={(event) => setExtractPageRange(event.currentTarget.value)}
+                  />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      selectedSinglePdfTask && void extractPdfPages(selectedSinglePdfTask)
+                    }
+                    disabled={!canExtractSelectedPages}
+                  >
+                    Extract pages
+                  </button>
+                </div>
+              </article>
+            </div>
+          </section>
+
           <section className="queue-panel" aria-label="Task queue">
             <div className="queue-heading">
               <div>
                 <h2>Task queue</h2>
                 <span>
-                  {tasks.length} total · {realLocalPdfTasks.length} local PDFs
+                  {tasks.length} total · {realLocalPdfTasks.length} local PDFs · {selectedTasks.length} selected
                 </span>
               </div>
-              <button
-                type="button"
-                onClick={() => void mergePdfTasks()}
-                disabled={!canMergePdfs}
-                title={
-                  qpdfAvailable
-                    ? "Merge all queued local PDF files with bundled qpdf."
-                    : "Bundled qpdf must be available before PDF merge can run."
-                }
-              >
-                Merge PDFs
-              </button>
             </div>
 
             {tasks.length === 0 ? (
@@ -879,6 +1066,7 @@ function App() {
             ) : (
               <div className="task-table" role="table" aria-label="Local tasks">
                 <div className="task-table-head" role="row">
+                  <span>Select</span>
                   <span>File</span>
                   <span>Status</span>
                   <span>Output preview</span>
@@ -886,6 +1074,13 @@ function App() {
                 </div>
                 {tasks.map((task) => (
                   <article className="task-row" role="row" key={task.id}>
+                    <label className="select-cell" aria-label={`Select ${task.displayName}`}>
+                      <input
+                        type="checkbox"
+                        checked={selectedTaskIds.has(task.id)}
+                        onChange={() => toggleTaskSelection(task.id)}
+                      />
+                    </label>
                     <div className="file-cell">
                       <strong>{task.displayName}</strong>
                       <span>
@@ -895,131 +1090,15 @@ function App() {
                     <span className={`status-chip status-${task.status}`}>
                       {statusLabels[task.status]}
                     </span>
-                    <div className="output-cell">
+                    <div className="output-cell" title={task.outputPreview}>
                       <span>{task.outputPreview}</span>
-                      <small>{task.sourcePreview}</small>
+                      <small className={task.sourcePath ? "" : "path-warning"}>
+                        {task.sourcePath
+                          ? task.sourcePreview
+                          : `${task.sourcePreview} · display metadata only`}
+                      </small>
                     </div>
                     <div className="task-actions">
-                      <button
-                        type="button"
-                        className="small-button"
-                        onClick={() => updateTaskStatus(task.id, "waiting")}
-                        disabled={task.status === "waiting"}
-                      >
-                        Wait
-                      </button>
-                      <button
-                        type="button"
-                        className="small-button"
-                        onClick={() => updateTaskStatus(task.id, "converting")}
-                        disabled={task.status === "completed"}
-                      >
-                        Convert
-                      </button>
-                      <button
-                        type="button"
-                        className="small-button"
-                        onClick={() => updateTaskStatus(task.id, "completed")}
-                        disabled={task.status === "cancelled"}
-                      >
-                        Done
-                      </button>
-                      <button
-                        type="button"
-                        className="small-button"
-                        onClick={() => updateTaskStatus(task.id, "failed")}
-                        disabled={task.status === "completed"}
-                      >
-                        Fail
-                      </button>
-                      {task.extension === "pdf" && task.sourcePath ? (
-                        <button
-                          type="button"
-                          className="small-button"
-                          onClick={() => void splitPdfTask(task)}
-                          disabled={!canSplitPdfTask(task)}
-                          title={
-                            qpdfAvailable
-                              ? "Split this one local PDF with bundled qpdf."
-                              : "Bundled qpdf must be available before PDF split can run."
-                          }
-                        >
-                          Split PDF
-                        </button>
-                      ) : null}
-                      {task.extension === "pdf" && task.sourcePath ? (
-                        <span className="extract-control">
-                          <input
-                            aria-label={`Pages to extract from ${task.displayName}`}
-                            className="page-range-input"
-                            placeholder="1,3,5-7"
-                            value={extractPageRanges[task.id] || ""}
-                            onChange={(event) =>
-                              setExtractPageRanges((currentRanges) => ({
-                                ...currentRanges,
-                                [task.id]: event.currentTarget.value
-                              }))
-                            }
-                          />
-                          <button
-                            type="button"
-                            className="small-button"
-                            onClick={() => void extractPdfPages(task)}
-                            disabled={!canExtractPdfTask(task)}
-                            title={
-                              qpdfAvailable
-                                ? "Extract selected pages from this one local PDF with bundled qpdf."
-                                : "Bundled qpdf must be available before PDF page extraction can run."
-                            }
-                          >
-                            Extract Pages
-                          </button>
-                        </span>
-                      ) : null}
-                      {task.extension === "pdf" && task.sourcePath ? (
-                        <>
-                          <span className="action-label">Rotate</span>
-                          <button
-                            type="button"
-                            className="small-button"
-                            onClick={() => void rotatePdfTask(task, -90)}
-                            disabled={!canRotatePdfTask(task)}
-                            title={
-                              qpdfAvailable
-                                ? "Rotate this one local PDF left 90 degrees with bundled qpdf."
-                                : "Bundled qpdf must be available before PDF rotate can run."
-                            }
-                          >
-                            Left 90
-                          </button>
-                          <button
-                            type="button"
-                            className="small-button"
-                            onClick={() => void rotatePdfTask(task, 90)}
-                            disabled={!canRotatePdfTask(task)}
-                            title={
-                              qpdfAvailable
-                                ? "Rotate this one local PDF right 90 degrees with bundled qpdf."
-                                : "Bundled qpdf must be available before PDF rotate can run."
-                            }
-                          >
-                            Right 90
-                          </button>
-                          <button
-                            type="button"
-                            className="small-button"
-                            onClick={() => void rotatePdfTask(task, 180)}
-                            disabled={!canRotatePdfTask(task)}
-                            title={
-                              qpdfAvailable
-                                ? "Rotate this one local PDF 180 degrees with bundled qpdf."
-                                : "Bundled qpdf must be available before PDF rotate can run."
-                            }
-                          >
-                            180
-                          </button>
-                        </>
-                      ) : null}
                       <button
                         type="button"
                         className="small-button"
