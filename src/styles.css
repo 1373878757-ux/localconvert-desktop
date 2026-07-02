@@ -1,0 +1,199 @@
+:root {
+  color: #18202b;
+  background: #f4f7fb;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+.app-shell {
+  width: min(1180px, calc(100% - 40px));
+  margin: 0 auto;
+  padding: 48px 0;
+}
+
+.hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(320px, 0.75fr);
+  gap: 24px;
+  align-items: stretch;
+}
+
+.hero-copy,
+.status-panel,
+.principle-card,
+.scaffold-note {
+  border: 1px solid #dde5ee;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 18px 50px rgba(44, 55, 76, 0.08);
+}
+
+.hero-copy {
+  padding: 44px;
+}
+
+.eyebrow,
+.panel-kicker {
+  margin: 0 0 14px;
+  color: #2c6d8d;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+h1,
+h2,
+p {
+  margin-top: 0;
+}
+
+h1 {
+  max-width: 760px;
+  margin-bottom: 18px;
+  color: #111827;
+  font-size: clamp(2.8rem, 8vw, 5.6rem);
+  line-height: 0.95;
+}
+
+h2 {
+  color: #111827;
+  font-size: 1.12rem;
+  line-height: 1.25;
+}
+
+.summary {
+  max-width: 700px;
+  margin-bottom: 32px;
+  color: #4c5b6d;
+  font-size: 1.08rem;
+  line-height: 1.7;
+}
+
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.platform-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 38px;
+  padding: 0 14px;
+  border: 1px solid #c4d7e5;
+  border-radius: 999px;
+  color: #164762;
+  background: #eff8fc;
+  font-size: 0.92rem;
+  font-weight: 700;
+}
+
+.status-panel {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 28px;
+}
+
+.panel-note {
+  color: #5a6573;
+  line-height: 1.6;
+}
+
+.status-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+.status-row {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid #e3e9f1;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.status-row dt {
+  color: #243244;
+  font-weight: 750;
+}
+
+.status-row dd {
+  margin: 0;
+  color: #8a4b12;
+  font-size: 0.92rem;
+}
+
+.principles {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 24px;
+}
+
+.principle-card {
+  min-height: 142px;
+  padding: 20px;
+}
+
+.principle-card p {
+  color: #617083;
+  line-height: 1.55;
+}
+
+.scaffold-note {
+  margin-top: 24px;
+  padding: 24px;
+}
+
+.scaffold-note p {
+  max-width: 880px;
+  color: #4c5b6d;
+  line-height: 1.65;
+}
+
+.mono-line {
+  margin-bottom: 0;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.92rem;
+}
+
+@media (max-width: 920px) {
+  .app-shell {
+    width: min(100% - 28px, 720px);
+    padding: 28px 0;
+  }
+
+  .hero,
+  .principles {
+    grid-template-columns: 1fr;
+  }
+
+  .hero-copy {
+    padding: 28px;
+  }
+}
