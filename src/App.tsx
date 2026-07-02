@@ -29,6 +29,15 @@ type EngineSelfCheck = {
   engines: EngineStatus[];
 };
 
+type OutputPathPlan = {
+  sourceDisplayName: string;
+  targetExtension: string;
+  plannedConvertedFolderPath: string;
+  plannedOutputFilename: string;
+  plannedOutputPath: string;
+  collisionStrategyExplanation: string;
+};
+
 const fallbackSelfCheck: EngineSelfCheck = {
   platform: "desktop scaffold",
   fullEdition: true,
@@ -124,30 +133,66 @@ function App() {
 
   const selectedTaskWithError = tasks.find((task) => task.errorLog);
 
+  async function planBackendOutput(task: LocalTask) {
+    if (!task.sourcePath) {
+      return;
+    }
+
+    try {
+      const plan = await invoke<OutputPathPlan>("plan_output_path", {
+        request: {
+          source: task.sourcePath,
+          targetExtension: "pdf",
+          outputStrategy: "converted-folder-next-to-source"
+        }
+      });
+
+      setTasks((currentTasks) =>
+        currentTasks.map((currentTask) =>
+          currentTask.id === task.id
+            ? {
+                ...currentTask,
+                outputPreview: plan.plannedOutputPath
+              }
+            : currentTask
+        )
+      );
+    } catch {
+      // Keep the frontend-only preview if backend planning is unavailable.
+    }
+  }
+
+  function outputNameFromPreview(outputPreview: string): string {
+    const normalizedPreview = outputPreview.replaceAll("\\", "/");
+    return normalizedPreview.split("/").pop() || outputPreview;
+  }
+
   function addFiles(fileList: FileList | File[]) {
     const files = Array.from(fileList);
     if (files.length === 0) {
       return;
     }
 
+    const outputNames = tasks.map((task) =>
+      outputNameFromPreview(task.outputPreview)
+    );
+    const createdTasks: LocalTask[] = [];
+
+    for (const file of files) {
+      const task = createTaskFromFile(file, [
+        ...outputNames,
+        ...createdTasks.map((item) => outputNameFromPreview(item.outputPreview))
+      ]);
+      createdTasks.push(task);
+    }
+
     setTasks((currentTasks) => {
-      const outputNames = currentTasks.map((task) =>
-        task.outputPreview.replace(/^converted\//, "")
-      );
-      const createdTasks: LocalTask[] = [];
-
-      for (const file of files) {
-        const task = createTaskFromFile(file, [
-          ...outputNames,
-          ...createdTasks.map((item) =>
-            item.outputPreview.replace(/^converted\//, "")
-          )
-        ]);
-        createdTasks.push(task);
-      }
-
       return [...createdTasks, ...currentTasks];
     });
+
+    for (const task of createdTasks) {
+      void planBackendOutput(task);
+    }
   }
 
   function handleInputChange(event: ChangeEvent<HTMLInputElement>) {

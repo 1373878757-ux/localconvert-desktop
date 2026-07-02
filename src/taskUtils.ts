@@ -10,6 +10,7 @@ export type LocalTask = {
   displayName: string;
   size: number;
   extension: string;
+  sourcePath?: string;
   sourcePreview: string;
   outputPreview: string;
   status: TaskStatus;
@@ -82,6 +83,7 @@ export function createTaskFromFile(
     path?: string;
     webkitRelativePath?: string;
   };
+  const sourcePath = fileWithOptionalPath.path?.trim() || undefined;
   const desiredOutputName = `${getBaseName(displayName)}.pdf`;
   const outputName = getOutputName(desiredOutputName, existingOutputNames);
 
@@ -90,8 +92,9 @@ export function createTaskFromFile(
     displayName,
     size: file.size,
     extension: getExtension(displayName),
+    sourcePath,
     sourcePreview:
-      fileWithOptionalPath.path ||
+      sourcePath ||
       fileWithOptionalPath.webkitRelativePath ||
       displayName,
     outputPreview: `converted/${outputName}`,
