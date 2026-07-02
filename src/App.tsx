@@ -1,4 +1,11 @@
-import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  ChangeEvent,
+  DragEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   LocalTask,
@@ -54,6 +61,15 @@ const fallbackSelfCheck: EngineSelfCheck = {
   ]
 };
 
+const toolCategories = [
+  "Documents to PDF",
+  "Image Conversion",
+  "Image Compression",
+  "Images to PDF",
+  "PDF Tools",
+  "Batch Queue"
+];
+
 const statusLabels: Record<TaskStatus, string> = {
   waiting: "Waiting",
   converting: "Converting",
@@ -71,6 +87,7 @@ const outputNameExample = [
 function App() {
   const [selfCheck, setSelfCheck] = useState<EngineSelfCheck>(fallbackSelfCheck);
   const [tasks, setTasks] = useState<LocalTask[]>([]);
+  const [activeTool, setActiveTool] = useState("Batch Queue");
   const [dragActive, setDragActive] = useState(false);
   const [folderMessage, setFolderMessage] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -120,10 +137,12 @@ function App() {
       const createdTasks: LocalTask[] = [];
 
       for (const file of files) {
-        const task = createTaskFromFile(
-          file,
-          [...outputNames, ...createdTasks.map((item) => item.outputPreview.replace(/^converted\//, ""))]
-        );
+        const task = createTaskFromFile(file, [
+          ...outputNames,
+          ...createdTasks.map((item) =>
+            item.outputPreview.replace(/^converted\//, "")
+          )
+        ]);
         createdTasks.push(task);
       }
 
@@ -191,7 +210,9 @@ function App() {
   }
 
   function removeTask(taskId: string) {
-    setTasks((currentTasks) => currentTasks.filter((task) => task.id !== taskId));
+    setTasks((currentTasks) =>
+      currentTasks.filter((task) => task.id !== taskId)
+    );
   }
 
   function clearCompletedTasks() {
@@ -203,24 +224,57 @@ function App() {
   return (
     <main className="app-shell">
       <header className="top-bar">
-        <div>
-          <p className="eyebrow">Desktop full edition</p>
+        <div className="app-title">
           <h1>LocalConvert Desktop</h1>
-          <p className="summary">
-            Local file intake and task queue planning UI. No conversion is wired,
-            no files are uploaded, and no file contents are read in this pass.
-          </p>
+          <p>Files stay on this computer.</p>
         </div>
-        <div className="platforms" aria-label="v1 platform targets">
-          <span>Windows x64</span>
-          <span>macOS Apple Silicon</span>
+        <div className="privacy-status" aria-label="Local privacy status">
+          <span>No upload</span>
+          <span>Local queue</span>
+          <span>Conversion disabled</span>
         </div>
       </header>
 
-      <section className="dashboard-grid">
-        <section className="panel intake-panel" aria-label="File intake">
-          <div
+      <div className="workbench">
+        <aside className="sidebar" aria-label="Tool categories">
+          <div className="sidebar-section-title">Tools</div>
+          <nav className="tool-nav">
+            {toolCategories.map((tool) => (
+              <button
+                type="button"
+                className={activeTool === tool ? "tool-item is-active" : "tool-item"}
+                key={tool}
+                onClick={() => setActiveTool(tool)}
+              >
+                {tool}
+              </button>
+            ))}
+          </nav>
+          <div className="sidebar-note">
+            <strong>Desktop full edition</strong>
+            <span>Windows x64 and macOS Apple Silicon are the v1 targets.</span>
+          </div>
+        </aside>
+
+        <section className="main-pane" aria-label="File queue workbench">
+          <div className="pane-header">
+            <div>
+              <p className="section-kicker">{activeTool}</p>
+              <h2>File intake</h2>
+            </div>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={clearCompletedTasks}
+              disabled={summary.completed === 0}
+            >
+              Clear completed
+            </button>
+          </div>
+
+          <section
             className={dragActive ? "drop-zone is-active" : "drop-zone"}
+            aria-label="Drop files"
             onDragEnter={(event) => {
               event.preventDefault();
               setDragActive(true);
@@ -235,12 +289,10 @@ function App() {
             }}
             onDrop={handleDrop}
           >
-            <p className="panel-kicker">Local intake</p>
-            <h2>Drop files here</h2>
-            <p>
-              Tasks are created from local WebView file metadata only: name,
-              size, extension, and a best-effort display path.
-            </p>
+            <div>
+              <h3>Drag files here or select files.</h3>
+              <p>Name, size, extension, and display path only.</p>
+            </div>
             <div className="button-row">
               <button type="button" onClick={() => fileInputRef.current?.click()}>
                 Select files
@@ -264,175 +316,158 @@ function App() {
               multiple
               onChange={handleInputChange}
             />
-          </div>
-          {folderMessage ? <p className="notice">{folderMessage}</p> : null}
-        </section>
+          </section>
 
-        <aside className="panel engine-panel" aria-label="Engine self-check">
-          <p className="panel-kicker">Engine self-check</p>
-          <h2>Conversion disabled</h2>
-          <p className="panel-note">
-            Platform: {selfCheck.platform}. Engines are intentionally not
-            bundled yet, so this UI cannot perform conversion.
-          </p>
-          <dl className="engine-list">
-            {selfCheck.engines.map((engine) => (
-              <div className="engine-row" key={engine.name}>
-                <dt>{engine.name}</dt>
-                <dd>{engine.message}</dd>
-              </div>
+          {folderMessage ? <p className="inline-note">{folderMessage}</p> : null}
+
+          <section className="status-summary" aria-label="Task status summary">
+            {(Object.keys(statusLabels) as TaskStatus[]).map((status) => (
+              <article className="summary-cell" key={status}>
+                <span>{statusLabels[status]}</span>
+                <strong>{summary[status]}</strong>
+              </article>
             ))}
-          </dl>
-        </aside>
-      </section>
+          </section>
 
-      <section className="summary-grid" aria-label="Task status summary">
-        {(Object.keys(statusLabels) as TaskStatus[]).map((status) => (
-          <article className="summary-card" key={status}>
-            <span className={`status-chip status-${status}`}>
-              {statusLabels[status]}
-            </span>
-            <strong>{summary[status]}</strong>
-          </article>
-        ))}
-      </section>
-
-      <section className="content-grid">
-        <section className="panel queue-panel" aria-label="Task queue">
-          <div className="section-heading">
-            <div>
-              <p className="panel-kicker">Task queue</p>
-              <h2>Local tasks</h2>
+          <section className="queue-panel" aria-label="Task queue">
+            <div className="queue-heading">
+              <h2>Task queue</h2>
+              <span>{tasks.length} total</span>
             </div>
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={clearCompletedTasks}
-              disabled={summary.completed === 0}
-            >
-              Clear completed
-            </button>
-          </div>
 
-          {tasks.length === 0 ? (
-            <div className="empty-state">
-              <h3>No tasks yet</h3>
-              <p>Select or drop files to create waiting tasks.</p>
-            </div>
-          ) : (
-            <div className="task-list">
-              {tasks.map((task) => (
-                <article className="task-card" key={task.id}>
-                  <div className="task-main">
+            {tasks.length === 0 ? (
+              <div className="empty-state">
+                <h3>No tasks yet</h3>
+                <p>Add files to create waiting tasks.</p>
+              </div>
+            ) : (
+              <div className="task-table" role="table" aria-label="Local tasks">
+                <div className="task-table-head" role="row">
+                  <span>File</span>
+                  <span>Status</span>
+                  <span>Output preview</span>
+                  <span>Actions</span>
+                </div>
+                {tasks.map((task) => (
+                  <article className="task-row" role="row" key={task.id}>
+                    <div className="file-cell">
+                      <strong>{task.displayName}</strong>
+                      <span>
+                        {task.extension.toUpperCase()} · {formatBytes(task.size)}
+                      </span>
+                    </div>
                     <span className={`status-chip status-${task.status}`}>
                       {statusLabels[task.status]}
                     </span>
-                    <div>
-                      <h3>{task.displayName}</h3>
-                      <p>
-                        {task.extension.toUpperCase()} · {formatBytes(task.size)}
-                      </p>
+                    <div className="output-cell">
+                      <span>{task.outputPreview}</span>
+                      <small>{task.sourcePreview}</small>
                     </div>
-                  </div>
-                  <dl className="task-meta">
-                    <div>
-                      <dt>Source</dt>
-                      <dd>{task.sourcePreview}</dd>
+                    <div className="task-actions">
+                      <button
+                        type="button"
+                        className="small-button"
+                        onClick={() => updateTaskStatus(task.id, "waiting")}
+                        disabled={task.status === "waiting"}
+                      >
+                        Wait
+                      </button>
+                      <button
+                        type="button"
+                        className="small-button"
+                        onClick={() => updateTaskStatus(task.id, "converting")}
+                        disabled={task.status === "completed"}
+                      >
+                        Convert
+                      </button>
+                      <button
+                        type="button"
+                        className="small-button"
+                        onClick={() => updateTaskStatus(task.id, "completed")}
+                        disabled={task.status === "cancelled"}
+                      >
+                        Done
+                      </button>
+                      <button
+                        type="button"
+                        className="small-button"
+                        onClick={() => updateTaskStatus(task.id, "failed")}
+                        disabled={task.status === "completed"}
+                      >
+                        Fail
+                      </button>
+                      <button
+                        type="button"
+                        className="small-button"
+                        onClick={() => cancelTask(task.id)}
+                        disabled={
+                          task.status === "completed" ||
+                          task.status === "cancelled"
+                        }
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        className="small-button"
+                        onClick={() => retryTask(task.id)}
+                        disabled={task.status !== "failed"}
+                      >
+                        Retry
+                      </button>
+                      <button
+                        type="button"
+                        className="small-button ghost-button"
+                        onClick={() => removeTask(task.id)}
+                      >
+                        Remove
+                      </button>
                     </div>
-                    <div>
-                      <dt>Output preview</dt>
-                      <dd>{task.outputPreview}</dd>
-                    </div>
-                  </dl>
-                  <div className="task-actions">
-                    <button
-                      type="button"
-                      onClick={() => updateTaskStatus(task.id, "waiting")}
-                      disabled={task.status === "waiting"}
-                    >
-                      Set waiting
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => updateTaskStatus(task.id, "converting")}
-                      disabled={task.status === "completed"}
-                    >
-                      Simulate converting
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => updateTaskStatus(task.id, "completed")}
-                      disabled={task.status === "cancelled"}
-                    >
-                      Complete
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => updateTaskStatus(task.id, "failed")}
-                      disabled={task.status === "completed"}
-                    >
-                      Fail
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => cancelTask(task.id)}
-                      disabled={task.status === "completed" || task.status === "cancelled"}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => retryTask(task.id)}
-                      disabled={task.status !== "failed"}
-                    >
-                      Retry
-                    </button>
-                    <button
-                      type="button"
-                      className="ghost-button"
-                      onClick={() => removeTask(task.id)}
-                    >
-                      Remove
-                    </button>
-                  </div>
-                </article>
-              ))}
-            </div>
-          )}
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
         </section>
 
-        <aside className="side-stack">
-          <section className="panel rules-panel">
-            <p className="panel-kicker">Output rule</p>
-            <h2>converted folder next to source</h2>
-            <p>
-              Output previews follow the README rule and never overwrite source
-              files. No folder is created in this UI-only pass.
-            </p>
-            <code>{outputNameExample.join("  ->  ")}</code>
+        <aside className="inspector" aria-label="Inspector">
+          <section className="inspector-card">
+            <h2>Output rule</h2>
+            <p>Use a converted folder next to the source file.</p>
+            <pre>{outputNameExample.join("\n")}</pre>
           </section>
 
-          <section className="panel log-panel">
-            <p className="panel-kicker">Error log</p>
-            <h2>Placeholder</h2>
-            <pre>
+          <section className="inspector-card">
+            <h2>Engine status</h2>
+            <p>Conversion engines are not bundled yet.</p>
+            <dl className="engine-list">
+              {selfCheck.engines.map((engine) => (
+                <div className="engine-row" key={engine.name}>
+                  <dt>{engine.name}</dt>
+                  <dd>{engine.message}</dd>
+                </div>
+              ))}
+            </dl>
+          </section>
+
+          <section className="inspector-card">
+            <h2>Error log</h2>
+            <pre className="log-box">
               {selectedTaskWithError?.errorLog ||
-                "No error log yet. Failed demo tasks will show a local placeholder here."}
+                "No error log. Failed demo tasks appear here."}
             </pre>
           </section>
 
-          <section className="panel privacy-panel">
-            <p className="panel-kicker">Privacy</p>
-            <h2>Local-only by design</h2>
+          <section className="inspector-card">
+            <h2>Local privacy</h2>
             <ul>
               <li>No upload.</li>
-              <li>No network call.</li>
               <li>No file contents read.</li>
-              <li>No conversion process spawned.</li>
+              <li>No conversion process started.</li>
             </ul>
           </section>
         </aside>
-      </section>
+      </div>
     </main>
   );
 }
