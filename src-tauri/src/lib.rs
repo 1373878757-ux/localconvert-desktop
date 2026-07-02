@@ -14,7 +14,7 @@ mod qpdf;
 const DEFAULT_OUTPUT_STRATEGY: &str = "converted-folder-next-to-source";
 const COLLISION_STRATEGY_EXPLANATION: &str =
     "Creates a converted folder next to the source file and appends (1), (2), ... when a filename already exists.";
-const MIN_SPLASH_DISPLAY_TIME: Duration = Duration::from_millis(800);
+const MIN_SPLASH_DISPLAY_TIME: Duration = Duration::from_millis(1800);
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
