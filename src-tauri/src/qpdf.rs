@@ -13,11 +13,12 @@ use std::{
 use std::os::unix::fs::PermissionsExt;
 
 const QPDF_EXECUTION_DISABLED_ERROR: &str =
-    "This qpdf operation is not enabled yet. Only PDF merge and split are enabled.";
+    "This qpdf operation is not enabled yet. Only PDF merge, split, and rotate are enabled.";
 
 const QPDF_ENGINE_MISSING_MESSAGE: &str = "Not bundled yet.";
 const QPDF_MERGE_TIMEOUT_SECONDS: u64 = 120;
 const QPDF_SPLIT_TIMEOUT_SECONDS: u64 = 120;
+const QPDF_ROTATE_TIMEOUT_SECONDS: u64 = 120;
 
 pub struct QpdfEngineDetection {
     pub status: &'static str,
@@ -92,6 +93,23 @@ pub struct QpdfSplitResult {
     message: String,
 }
 
+#[derive(Serialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct QpdfRotateResult {
+    success: bool,
+    operation: &'static str,
+    source_path: String,
+    output_path: String,
+    output_bytes: u64,
+    degrees: String,
+    pages: String,
+    stdout: String,
+    stderr: String,
+    exit_code: Option<i32>,
+    timed_out: bool,
+    message: String,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct QpdfExecutionResult {
     stdout: String,
@@ -148,9 +166,26 @@ pub fn qpdf_extract_pages(request: QpdfExtractPagesRequest) -> Result<(), String
 }
 
 #[tauri::command]
-pub fn qpdf_rotate_pages(request: QpdfRotatePagesRequest) -> Result<(), String> {
-    build_qpdf_rotate_arguments(&request)?;
-    Err(qpdf_execution_disabled_error())
+pub fn qpdf_rotate_pages(request: QpdfRotatePagesRequest) -> QpdfRotateResult {
+    let source_path = request.source.trim().to_string();
+    let output_path = request.output.trim().to_string();
+    let degrees = normalize_rotation_degrees(request.degrees).unwrap_or_default();
+    let pages = normalize_optional_page_ranges(&request.pages).unwrap_or_default();
+
+    execute_qpdf_rotate(&request).unwrap_or_else(|message| QpdfRotateResult {
+        success: false,
+        operation: "rotate",
+        source_path,
+        output_path,
+        output_bytes: 0,
+        degrees,
+        pages,
+        stdout: String::new(),
+        stderr: String::new(),
+        exit_code: None,
+        timed_out: false,
+        message,
+    })
 }
 
 pub fn detect_qpdf_engine(platform: &str) -> QpdfEngineDetection {
@@ -398,6 +433,122 @@ fn execute_qpdf_split(request: &QpdfSplitRequest) -> Result<QpdfSplitResult, Str
         exit_code: execution.exit_code,
         timed_out: false,
         message: "PDF split completed locally with bundled qpdf.".to_string(),
+    })
+}
+
+fn execute_qpdf_rotate(request: &QpdfRotatePagesRequest) -> Result<QpdfRotateResult, String> {
+    build_qpdf_rotate_arguments(request)?;
+    let source = validate_pdf_path(&request.source, "Source PDF")?;
+    let source_path = PathBuf::from(&source);
+    let requested_output = PathBuf::from(validate_pdf_path(&request.output, "Output PDF")?);
+    let degrees = normalize_rotation_degrees(request.degrees)?;
+    let pages = normalize_optional_page_ranges(&request.pages)?;
+
+    validate_source_pdf_file(&source_path)?;
+    validate_rotate_output_location(&source_path, &requested_output)?;
+
+    let output_path = collision_safe_pdf_output_path(&requested_output)?;
+    let plan = build_qpdf_rotate_arguments_for_output(&source, &output_path, &degrees, &pages)?;
+
+    let platform = current_platform_key();
+    let qpdf_path = resolve_qpdf_sidecar_path(platform)?;
+    let output_parent = output_path
+        .parent()
+        .ok_or_else(|| "Output PDF must have a converted output folder.".to_string())?;
+    fs::create_dir_all(output_parent).map_err(|error| {
+        format!(
+            "Unable to create converted output folder {}: {error}",
+            path_to_string(output_parent)
+        )
+    })?;
+
+    if output_path.exists() {
+        return Err(format!(
+            "Output PDF already exists and will not be overwritten: {}",
+            path_to_string(&output_path)
+        ));
+    }
+
+    let execution = run_qpdf_command(
+        &qpdf_path,
+        &plan.arguments,
+        Duration::from_secs(QPDF_ROTATE_TIMEOUT_SECONDS),
+    )?;
+
+    if execution.timed_out {
+        remove_partial_output(&output_path);
+        return Ok(QpdfRotateResult {
+            success: false,
+            operation: "rotate",
+            source_path: path_to_string(&source_path),
+            output_path: path_to_string(&output_path),
+            output_bytes: 0,
+            degrees,
+            pages,
+            stdout: execution.stdout,
+            stderr: execution.stderr,
+            exit_code: execution.exit_code,
+            timed_out: true,
+            message: format!("qpdf rotate timed out after {QPDF_ROTATE_TIMEOUT_SECONDS} seconds."),
+        });
+    }
+
+    if execution.exit_code != Some(0) {
+        remove_partial_output(&output_path);
+        return Ok(QpdfRotateResult {
+            success: false,
+            operation: "rotate",
+            source_path: path_to_string(&source_path),
+            output_path: path_to_string(&output_path),
+            output_bytes: 0,
+            degrees,
+            pages,
+            stdout: execution.stdout,
+            stderr: execution.stderr,
+            exit_code: execution.exit_code,
+            timed_out: false,
+            message: "qpdf rotate failed.".to_string(),
+        });
+    }
+
+    let output_metadata = fs::metadata(&output_path).map_err(|error| {
+        format!(
+            "qpdf reported success, but rotated output PDF is missing: {}: {error}",
+            path_to_string(&output_path)
+        )
+    })?;
+
+    if output_metadata.len() == 0 {
+        remove_partial_output(&output_path);
+        return Ok(QpdfRotateResult {
+            success: false,
+            operation: "rotate",
+            source_path: path_to_string(&source_path),
+            output_path: path_to_string(&output_path),
+            output_bytes: 0,
+            degrees,
+            pages,
+            stdout: execution.stdout,
+            stderr: execution.stderr,
+            exit_code: execution.exit_code,
+            timed_out: false,
+            message: "qpdf reported success, but rotated output PDF is empty.".to_string(),
+        });
+    }
+
+    Ok(QpdfRotateResult {
+        success: true,
+        operation: "rotate",
+        source_path: path_to_string(&source_path),
+        output_path: path_to_string(&output_path),
+        output_bytes: output_metadata.len(),
+        degrees,
+        pages,
+        stdout: execution.stdout,
+        stderr: execution.stderr,
+        exit_code: execution.exit_code,
+        timed_out: false,
+        message: "PDF rotate completed locally with bundled qpdf.".to_string(),
     })
 }
 
@@ -672,10 +823,22 @@ fn build_qpdf_extract_arguments(
 fn build_qpdf_rotate_arguments(
     request: &QpdfRotatePagesRequest,
 ) -> Result<QpdfCommandPlan, String> {
-    let source = validate_path_like(&request.source, "Source PDF")?;
-    let output = validate_path_like(&request.output, "Output PDF")?;
-    let pages = normalize_page_ranges(&request.pages)?;
+    let source = validate_pdf_path(&request.source, "Source PDF")?;
+    let output = validate_pdf_path(&request.output, "Output PDF")?;
+    let pages = normalize_optional_page_ranges(&request.pages)?;
     let degrees = normalize_rotation_degrees(request.degrees)?;
+
+    build_qpdf_rotate_arguments_for_output(&source, Path::new(&output), &degrees, &pages)
+}
+
+fn build_qpdf_rotate_arguments_for_output(
+    source: &str,
+    output: &Path,
+    degrees: &str,
+    pages: &str,
+) -> Result<QpdfCommandPlan, String> {
+    let source = validate_pdf_path(source, "Source PDF")?;
+    let output = validate_pdf_path(&path_to_string(output), "Output PDF")?;
 
     Ok(qpdf_plan(vec![
         source,
@@ -831,6 +994,91 @@ fn validate_split_output_location(
     }
 
     Ok(())
+}
+
+fn validate_rotate_output_location(source_path: &Path, output_path: &Path) -> Result<(), String> {
+    validate_merge_output_path_shape(output_path)?;
+
+    let source_parent = source_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| "Source PDF must have a parent folder.".to_string())?;
+    let output_parent = output_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| "Output PDF must have a converted output folder.".to_string())?;
+    let output_grandparent = output_parent
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| "Output PDF converted folder must have a parent folder.".to_string())?;
+
+    if output_grandparent != source_parent {
+        return Err(format!(
+            "Output PDF must be planned inside the converted folder next to the source PDF: {}",
+            path_to_string(output_path)
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_merge_output_path_shape(output_path: &Path) -> Result<(), String> {
+    if !has_pdf_extension(output_path) {
+        return Err(format!(
+            "Output PDF must use a .pdf extension: {}",
+            path_to_string(output_path)
+        ));
+    }
+
+    let parent = output_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| "Output PDF must have a converted output folder.".to_string())?;
+
+    if parent.file_name().and_then(|name| name.to_str()) != Some("converted") {
+        return Err(format!(
+            "Output PDF must be planned inside a converted folder: {}",
+            path_to_string(output_path)
+        ));
+    }
+
+    if parent.exists() && !parent.is_dir() {
+        return Err(format!(
+            "Converted output path exists but is not a folder: {}",
+            path_to_string(parent)
+        ));
+    }
+
+    Ok(())
+}
+
+fn collision_safe_pdf_output_path(desired_output_path: &Path) -> Result<PathBuf, String> {
+    validate_merge_output_path_shape(desired_output_path)?;
+
+    if !desired_output_path.exists() {
+        return Ok(desired_output_path.to_path_buf());
+    }
+
+    let parent = desired_output_path
+        .parent()
+        .ok_or_else(|| "Output PDF must have a converted output folder.".to_string())?;
+    let stem = desired_output_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .ok_or_else(|| "Output PDF must have a valid filename.".to_string())?;
+    let extension = desired_output_path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or("pdf");
+
+    let mut index = 1;
+    loop {
+        let candidate = parent.join(format!("{stem} ({index}).{extension}"));
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+        index += 1;
+    }
 }
 
 fn normalize_split_filename_prefix(prefix: Option<&str>) -> Result<String, String> {
@@ -1032,6 +1280,14 @@ fn normalize_rotation_degrees(degrees: i16) -> Result<String, String> {
         -90 | -180 | -270 => Ok(degrees.to_string()),
         _ => Err("Rotation degrees must be one of 90, 180, 270, -90, -180, or -270.".to_string()),
     }
+}
+
+fn normalize_optional_page_ranges(input: &str) -> Result<String, String> {
+    if input.trim().is_empty() {
+        return Ok("1-z".to_string());
+    }
+
+    normalize_page_ranges(input)
 }
 
 fn normalize_page_ranges(input: &str) -> Result<String, String> {
@@ -1427,6 +1683,137 @@ mod tests {
         );
     }
 
+    #[test]
+    fn plans_rotate_arguments_with_default_all_pages() {
+        let plan = build_qpdf_rotate_arguments(&QpdfRotatePagesRequest {
+            source: "/Users/mac/Desktop/report.pdf".to_string(),
+            pages: " ".to_string(),
+            degrees: -90,
+            output: "/Users/mac/Desktop/converted/report rotated.pdf".to_string(),
+        })
+        .expect("rotate arguments should be planned");
+
+        assert_eq!(
+            plan.arguments,
+            vec![
+                "/Users/mac/Desktop/report.pdf",
+                "/Users/mac/Desktop/converted/report rotated.pdf",
+                "--rotate=-90:1-z",
+            ]
+        );
+    }
+
+    #[test]
+    fn accepts_and_rejects_rotate_angles() {
+        for (degrees, expected) in [
+            (90, "+90"),
+            (180, "+180"),
+            (270, "+270"),
+            (-90, "-90"),
+            (-180, "-180"),
+            (-270, "-270"),
+        ] {
+            assert_eq!(
+                normalize_rotation_degrees(degrees).expect("angle should be accepted"),
+                expected
+            );
+        }
+
+        for degrees in [0, 45, 360, -45] {
+            assert!(
+                normalize_rotation_degrees(degrees).is_err(),
+                "{degrees} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_rotate_requests() {
+        let empty_source = build_qpdf_rotate_arguments(&QpdfRotatePagesRequest {
+            source: " ".to_string(),
+            pages: "1".to_string(),
+            degrees: 90,
+            output: "/Users/mac/Desktop/converted/report.pdf".to_string(),
+        });
+        assert_eq!(
+            empty_source,
+            Err("Source PDF path is required.".to_string())
+        );
+
+        let non_pdf_source = build_qpdf_rotate_arguments(&QpdfRotatePagesRequest {
+            source: "/Users/mac/Desktop/report.docx".to_string(),
+            pages: "1".to_string(),
+            degrees: 90,
+            output: "/Users/mac/Desktop/converted/report.pdf".to_string(),
+        });
+        assert_eq!(
+            non_pdf_source,
+            Err("Source PDF must use a .pdf extension: /Users/mac/Desktop/report.docx".to_string())
+        );
+
+        let non_pdf_output = build_qpdf_rotate_arguments(&QpdfRotatePagesRequest {
+            source: "/Users/mac/Desktop/report.pdf".to_string(),
+            pages: "1".to_string(),
+            degrees: 90,
+            output: "/Users/mac/Desktop/converted/report.txt".to_string(),
+        });
+        assert_eq!(
+            non_pdf_output,
+            Err(
+                "Output PDF must use a .pdf extension: /Users/mac/Desktop/converted/report.txt"
+                    .to_string()
+            )
+        );
+
+        let invalid_page_range = build_qpdf_rotate_arguments(&QpdfRotatePagesRequest {
+            source: "/Users/mac/Desktop/report.pdf".to_string(),
+            pages: "3-1".to_string(),
+            degrees: 90,
+            output: "/Users/mac/Desktop/converted/report.pdf".to_string(),
+        });
+        assert_eq!(
+            invalid_page_range,
+            Err("Page range start must be before end: 3-1".to_string())
+        );
+    }
+
+    #[test]
+    fn rejects_missing_rotate_source_file() {
+        let case_dir = temp_fixture_path("missing-rotate-source");
+        let result = qpdf_rotate_pages(QpdfRotatePagesRequest {
+            source: path_to_string(&case_dir.join("missing.pdf")),
+            pages: "".to_string(),
+            degrees: 90,
+            output: path_to_string(&case_dir.join("converted").join("missing rotated.pdf")),
+        });
+
+        assert!(!result.success);
+        assert!(result.message.contains("Source PDF does not exist"));
+    }
+
+    #[test]
+    fn plans_collision_safe_rotate_output_without_overwrite() {
+        let case_dir = temp_fixture_path("rotate-collision");
+        let converted_dir = case_dir.join("converted");
+        fs::create_dir_all(&converted_dir).expect("converted test directory should be created");
+        let output = converted_dir.join("report rotated.pdf");
+        let first_collision = converted_dir.join("report rotated (1).pdf");
+        fs::write(&output, b"existing").expect("existing rotate output should be written");
+        fs::write(&first_collision, b"existing")
+            .expect("existing rotate collision output should be written");
+
+        let planned_output = collision_safe_pdf_output_path(&output)
+            .expect("collision-safe rotate output should be planned");
+
+        assert_eq!(planned_output, converted_dir.join("report rotated (2).pdf"));
+        assert_eq!(
+            fs::read(&output).expect("existing output should remain readable"),
+            b"existing"
+        );
+
+        let _ = fs::remove_dir_all(case_dir);
+    }
+
     fn temp_fixture_path(name: &str) -> PathBuf {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1707,6 +2094,71 @@ mod tests {
             .output_paths
             .iter()
             .all(|output| output.contains("report-page (1)-")));
+
+        let _ = fs::remove_dir_all(case_dir);
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[test]
+    fn qpdf_rotate_execution_writes_only_planned_output() {
+        let case_dir = temp_fixture_path("execute-rotate");
+        fs::create_dir_all(&case_dir).expect("rotate smoke directory should be created");
+        let source = case_dir.join("扫描 件.pdf");
+        let output = case_dir.join("converted").join("扫描 件 rotated.pdf");
+        write_tiny_pdf(&source, "Rotate");
+        let source_before = fs::read(&source).expect("source should be readable");
+
+        let result = qpdf_rotate_pages(QpdfRotatePagesRequest {
+            source: path_to_string(&source),
+            pages: "".to_string(),
+            degrees: 90,
+            output: path_to_string(&output),
+        });
+
+        assert!(result.success, "{}", result.message);
+        assert_eq!(result.source_path, path_to_string(&source));
+        assert_eq!(result.output_path, path_to_string(&output));
+        assert_eq!(result.degrees, "+90");
+        assert_eq!(result.pages, "1-z");
+        assert!(result.output_bytes > 0);
+        assert!(output.exists());
+        assert_eq!(
+            fs::read(&source).expect("source should remain readable"),
+            source_before
+        );
+
+        let _ = fs::remove_dir_all(case_dir);
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[test]
+    fn qpdf_rotate_execution_avoids_overwriting_existing_output() {
+        let case_dir = temp_fixture_path("execute-rotate-collision");
+        let converted_dir = case_dir.join("converted");
+        fs::create_dir_all(&converted_dir).expect("converted directory should be created");
+        let source = case_dir.join("report.pdf");
+        let desired_output = converted_dir.join("report rotated.pdf");
+        write_tiny_pdf(&source, "Rotate");
+        fs::write(&desired_output, b"keep me")
+            .expect("existing rotate output fixture should be written");
+
+        let result = qpdf_rotate_pages(QpdfRotatePagesRequest {
+            source: path_to_string(&source),
+            pages: "1".to_string(),
+            degrees: 180,
+            output: path_to_string(&desired_output),
+        });
+
+        assert!(result.success, "{}", result.message);
+        assert_eq!(
+            fs::read(&desired_output).expect("existing output should remain readable"),
+            b"keep me"
+        );
+        assert_eq!(
+            result.output_path,
+            path_to_string(&converted_dir.join("report rotated (1).pdf"))
+        );
+        assert!(Path::new(&result.output_path).exists());
 
         let _ = fs::remove_dir_all(case_dir);
     }

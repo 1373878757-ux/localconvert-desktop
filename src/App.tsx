@@ -65,6 +65,21 @@ type QpdfSplitResult = {
   message: string;
 };
 
+type QpdfRotateResult = {
+  success: boolean;
+  operation: "rotate";
+  sourcePath: string;
+  outputPath: string;
+  outputBytes: number;
+  degrees: string;
+  pages: string;
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+  timedOut: boolean;
+  message: string;
+};
+
 const fallbackSelfCheck: EngineSelfCheck = {
   platform: "desktop scaffold",
   fullEdition: true,
@@ -257,6 +272,21 @@ function App() {
     ].join("\n");
   }
 
+  function formatRotateLog(result: QpdfRotateResult) {
+    return [
+      result.message,
+      `Source: ${result.sourcePath || "not available"}`,
+      `Output: ${result.outputPath || "not written"}`,
+      `Output bytes: ${result.outputBytes}`,
+      `Rotation: ${result.degrees || "not applied"}`,
+      `Pages: ${result.pages || "not selected"}`,
+      `Exit code: ${result.exitCode ?? "none"}`,
+      `Timed out: ${result.timedOut ? "yes" : "no"}`,
+      result.stdout ? `stdout:\n${result.stdout}` : "stdout: <empty>",
+      result.stderr ? `stderr:\n${result.stderr}` : "stderr: <empty>"
+    ].join("\n");
+  }
+
   function canSplitPdfTask(task: LocalTask) {
     return (
       qpdfAvailable &&
@@ -265,6 +295,10 @@ function App() {
       task.status !== "converting" &&
       task.status !== "cancelled"
     );
+  }
+
+  function canRotatePdfTask(task: LocalTask) {
+    return canSplitPdfTask(task);
   }
 
   function addFiles(fileList: FileList | File[]) {
@@ -513,6 +547,83 @@ function App() {
     }
   }
 
+  async function rotatePdfTask(task: LocalTask, degrees: 90 | 180 | -90) {
+    if (!canRotatePdfTask(task) || !task.sourcePath) {
+      setFolderMessage(
+        "PDF rotate requires bundled qpdf and one local PDF file with a real path."
+      );
+      return;
+    }
+
+    setTasks((currentTasks) =>
+      currentTasks.map((currentTask) =>
+        currentTask.id === task.id
+          ? {
+              ...currentTask,
+              status: "converting",
+              errorLog: ""
+            }
+          : currentTask
+      )
+    );
+
+    try {
+      const outputSource = buildSiblingPath(
+        task.sourcePath,
+        `${getBaseName(task.displayName)} rotated.pdf`
+      );
+      const outputPlan = await invoke<OutputPathPlan>("plan_output_path", {
+        request: {
+          source: outputSource,
+          targetExtension: "pdf",
+          outputStrategy: "converted-folder-next-to-source"
+        }
+      });
+      const result = await invoke<QpdfRotateResult>("qpdf_rotate_pages", {
+        request: {
+          source: task.sourcePath,
+          pages: "",
+          degrees,
+          output: outputPlan.plannedOutputPath
+        }
+      });
+      const log = formatRotateLog(result);
+
+      setTasks((currentTasks) =>
+        currentTasks.map((currentTask) =>
+          currentTask.id === task.id
+            ? {
+                ...currentTask,
+                status: result.success ? "completed" : "failed",
+                outputPreview: result.success ? result.outputPath : task.outputPreview,
+                errorLog: result.success ? "" : log
+              }
+            : currentTask
+        )
+      );
+      setFolderMessage(
+        result.success
+          ? `PDF rotate completed locally: ${result.outputPath}`
+          : "PDF rotate failed locally. See the error log."
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "PDF rotate failed locally.";
+      setTasks((currentTasks) =>
+        currentTasks.map((currentTask) =>
+          currentTask.id === task.id
+            ? {
+                ...currentTask,
+                status: "failed",
+                errorLog: message
+              }
+            : currentTask
+        )
+      );
+      setFolderMessage("PDF rotate failed locally. See the error log.");
+    }
+  }
+
   return (
     <main className="app-shell">
       <header className="top-bar">
@@ -524,7 +635,7 @@ function App() {
           <span>No upload</span>
           <span>Local queue</span>
           <span>
-            {qpdfAvailable ? "PDF merge/split enabled" : "Conversion disabled"}
+            {qpdfAvailable ? "PDF merge/split/rotate enabled" : "Conversion disabled"}
           </span>
         </div>
       </header>
@@ -721,6 +832,50 @@ function App() {
                           Split PDF
                         </button>
                       ) : null}
+                      {task.extension === "pdf" && task.sourcePath ? (
+                        <>
+                          <span className="action-label">Rotate</span>
+                          <button
+                            type="button"
+                            className="small-button"
+                            onClick={() => void rotatePdfTask(task, -90)}
+                            disabled={!canRotatePdfTask(task)}
+                            title={
+                              qpdfAvailable
+                                ? "Rotate this one local PDF left 90 degrees with bundled qpdf."
+                                : "Bundled qpdf must be available before PDF rotate can run."
+                            }
+                          >
+                            Left 90
+                          </button>
+                          <button
+                            type="button"
+                            className="small-button"
+                            onClick={() => void rotatePdfTask(task, 90)}
+                            disabled={!canRotatePdfTask(task)}
+                            title={
+                              qpdfAvailable
+                                ? "Rotate this one local PDF right 90 degrees with bundled qpdf."
+                                : "Bundled qpdf must be available before PDF rotate can run."
+                            }
+                          >
+                            Right 90
+                          </button>
+                          <button
+                            type="button"
+                            className="small-button"
+                            onClick={() => void rotatePdfTask(task, 180)}
+                            disabled={!canRotatePdfTask(task)}
+                            title={
+                              qpdfAvailable
+                                ? "Rotate this one local PDF 180 degrees with bundled qpdf."
+                                : "Bundled qpdf must be available before PDF rotate can run."
+                            }
+                          >
+                            180
+                          </button>
+                        </>
+                      ) : null}
                       <button
                         type="button"
                         className="small-button"
@@ -766,7 +921,7 @@ function App() {
             <h2>Engine status</h2>
             <p>
               {qpdfAvailable
-                ? "PDF merge and split are enabled locally with bundled qpdf. Other conversions remain disabled."
+                ? "PDF merge, split, and rotate are enabled locally with bundled qpdf. Other conversions remain disabled."
                 : "Conversion engines are not bundled yet."}
             </p>
             <dl className="engine-list">
@@ -783,7 +938,7 @@ function App() {
             <h2>Error log</h2>
             <pre className="log-box">
               {selectedTaskWithError?.errorLog ||
-                "No error log. Failed PDF merge, PDF split, or demo tasks appear here."}
+                "No error log. Failed PDF merge, split, rotate, or demo tasks appear here."}
             </pre>
           </section>
 
@@ -791,7 +946,7 @@ function App() {
             <h2>Local privacy</h2>
             <ul>
               <li>No upload.</li>
-              <li>PDF merge and split run with bundled local qpdf only.</li>
+              <li>PDF merge, split, and rotate run with bundled local qpdf only.</li>
               <li>Other conversion operations remain disabled.</li>
             </ul>
           </section>
