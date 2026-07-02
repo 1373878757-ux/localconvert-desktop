@@ -823,12 +823,10 @@ function App() {
       <header className="top-bar">
         <div className="app-title">
           <h1>LocalConvert Desktop</h1>
-          <p>
-            <span>by 田宸宇</span>
-            <span>Files stay on this computer.</span>
-          </p>
+          <p>by 田宸宇</p>
         </div>
         <div className="privacy-status" aria-label="Local privacy status">
+          <span>Files stay on this computer</span>
           <span>No upload</span>
           <span>Local queue</span>
           <span>
@@ -1137,6 +1135,14 @@ function App() {
         </section>
 
         <aside className="inspector" aria-label="Inspector">
+          <section className="inspector-card">
+            <h2>About</h2>
+            <p>
+              <strong>Created by 田宸宇</strong>
+            </p>
+            <p>Local-only file conversion tool.</p>
+          </section>
+
           <section className="inspector-card">
             <h2>Output rule</h2>
             <p>Use a converted folder next to the source file.</p>
