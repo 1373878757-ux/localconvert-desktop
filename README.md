@@ -1,0 +1,287 @@
+# LocalConvert Desktop
+
+## Project Overview
+
+LocalConvert Desktop is a desktop-first file conversion app for people who want reliable local conversion without sending files to a cloud service.
+
+The app is planned as a Tauri v2 desktop application with a React and TypeScript frontend, Rust backend commands, and bundled sidecar conversion engines. Conversion work runs on the user's machine. The app should not require a server, account, cloud storage, or internet connection to convert supported files after installation.
+
+This README is the source of truth for the project. Before any code is written or changed, update this document first when the intended product behavior, conversion scope, architecture, privacy model, output rules, or build expectations change.
+
+The first implementation should focus on a dependable v1 conversion set, clear task status, safe output handling, and predictable local execution rather than broad format coverage.
+
+## Product Principles
+
+- Local by default: files are processed on the user's device.
+- No cloud upload: source files are not uploaded for conversion.
+- No server dependency: conversion does not depend on a hosted backend.
+- Offline conversion: supported conversions should work without internet access after installation.
+- Bundled engines: runtime users should not manually install LibreOffice, qpdf, Poppler, PDFium, image libraries, or other conversion dependencies.
+- Preserve originals: original files are never overwritten by default.
+- Clear outputs: converted files are written to a predictable local folder.
+- Transparent failures: failed tasks should show useful error information without retaining hidden source copies.
+- Safe process execution: sidecar tools are launched with argument arrays, explicit paths, timeouts, and cleanup.
+- README-first development: implementation work must follow this README, and scope changes must be documented here before code changes.
+- Strict local scope: do not implement video conversion, audio conversion, cloud upload, or server-side conversion.
+
+## Key Features
+
+- Drag-and-drop local file selection.
+- Batch conversion queue with visible task status.
+- Office-to-PDF conversion for common Office documents.
+- Image format conversion, compression, resizing, and metadata removal.
+- Multiple images combined into a single PDF.
+- PDF merge, split, page extraction, rotation, rasterization, and preview support.
+- Output folder opening from completed tasks.
+- Retry and cancellation for queued or running tasks where safe.
+- Success and failure summaries after batch work.
+- Failure logs that capture command context and engine output without copying or retaining source files.
+
+## Supported Conversions
+
+The v1 scope should prioritize these conversion groups:
+
+| Category | Supported operations |
+| --- | --- |
+| Office to PDF | Convert DOCX, PPTX, and XLSX files to PDF using LibreOffice headless mode. |
+| Images | Convert common image formats, apply compression presets, resize images, and remove EXIF metadata. |
+| Images to PDF | Combine multiple images into one PDF in user-selected order. |
+| PDF structure | Merge PDFs, split PDFs, extract page ranges, and rotate pages. |
+| PDF rasterization | Convert PDF pages to images and generate previews. |
+
+Format support should be expanded only when the local engine path, output validation, and packaging story are reliable.
+
+## Architecture
+
+LocalConvert Desktop should use a layered desktop architecture:
+
+1. The React and TypeScript frontend manages file selection, queue display, options, progress, cancellation, retry, summaries, and output-folder actions.
+2. Tauri v2 exposes Rust backend commands for validated conversion requests and filesystem operations.
+3. Rust commands normalize paths, create output destinations, launch bundled sidecar engines, enforce timeouts, capture stdout and stderr, validate outputs, and return structured task results.
+4. Bundled conversion engines perform format-specific work as sidecar binaries or packaged runtime assets.
+
+The frontend should not directly shell out to conversion tools. It should call Tauri commands with structured request data. The Rust side should be responsible for process safety, path handling, engine discovery, cleanup, and validation.
+
+## Bundled Conversion Engines
+
+Runtime installers should include the conversion engines required for the supported v1 feature set.
+
+| Engine | Responsibility |
+| --- | --- |
+| LibreOffice headless | Office-to-PDF conversion for DOCX, PPTX, and XLSX files. |
+| Sharp/libvips-equivalent | Image conversion, compression, resizing, and metadata stripping. |
+| qpdf | PDF structure operations such as merge, split, page extraction, and rotation. |
+| Poppler/PDFium | PDF rasterization, page-to-image conversion, thumbnails, and previews. |
+
+The exact packaging layout can vary by platform, but the app should resolve engines from its own bundled resources instead of expecting users to install command-line tools manually.
+
+## Privacy and Security Model
+
+LocalConvert Desktop is designed around local file privacy:
+
+- Source files stay on the user's machine.
+- Supported conversions do not require internet access after installation.
+- No account, cloud workspace, or online storage is required.
+- The app should not upload source files, converted files, logs, thumbnails, or metadata.
+- Failure logs should include useful diagnostics such as engine name, exit code, timeout state, sanitized arguments, stdout, and stderr.
+- Failure logs must not retain hidden copies of source documents.
+- Temporary files should be scoped to a task and cleaned after completion, cancellation, timeout, or failure.
+
+Process execution must follow these rules:
+
+- Use argument-array command execution.
+- Do not use `shell=true`.
+- Pass file paths as arguments, not by string-concatenating shell commands.
+- Support paths containing spaces, CJK characters, long filenames, and platform-specific path separators.
+- Use explicit sidecar paths resolved from the application bundle.
+- Apply per-task timeouts.
+- Clean up child processes and temporary directories after timeout or cancellation.
+- Capture stdout and stderr for diagnostics.
+- Validate expected output files before marking a task as successful.
+
+## Default Output Rules
+
+By default, converted files should be written to a `converted` folder next to the source file.
+
+Example:
+
+```text
+/Users/example/Documents/report.docx
+/Users/example/Documents/converted/report.pdf
+```
+
+The app should create the `converted` folder when it does not exist.
+
+Original files must not be overwritten by default. If the target filename already exists, the app should auto-increment the output filename:
+
+```text
+report.pdf
+report (1).pdf
+report (2).pdf
+```
+
+This rule applies to single-file conversions, batch conversions, and generated files such as combined PDFs or exported PDF pages.
+
+## Task Queue Behavior
+
+The conversion queue should make task state easy to understand and recover from.
+
+Expected task states:
+
+- Pending
+- Running
+- Succeeded
+- Failed
+- Cancelled
+- Retrying
+
+Expected queue behavior:
+
+- Each task should show its source file, requested operation, output path, status, and error summary when applicable.
+- Batch work should continue when one task fails unless the user cancels the batch.
+- Users should be able to retry failed tasks.
+- Users should be able to cancel pending tasks.
+- Running-task cancellation should terminate the child process when supported by the active engine.
+- Completed tasks should offer an action to open the output folder.
+- Batch completion should show a success and failure summary.
+
+## Office Conversion Notes
+
+Office-to-PDF conversion should use LibreOffice in headless mode through the bundled runtime.
+
+Implementation notes:
+
+- Use an isolated LibreOffice user profile per task or worker to avoid shared profile locks and user-machine configuration drift.
+- Pass paths through argument arrays and avoid shell invocation.
+- Enforce a conversion timeout.
+- Capture stdout and stderr.
+- Clean up temporary profiles and intermediate files.
+- Validate the output PDF before reporting success.
+- Treat a zero exit code without a readable output PDF as a failure.
+- Surface clear guidance when a document cannot be converted because of corruption, unsupported content, password protection, or engine failure.
+
+Office rendering can differ from the source application's native output. The v1 goal is reliable local conversion with clear failure handling, not pixel-perfect parity for every Office feature.
+
+## Development Setup
+
+This workspace does not currently include a project manifest, so the commands below are generic Tauri development defaults for the planned implementation.
+
+Development machines need the normal Tauri v2 toolchain requirements for the target platform, including Node.js, npm, Rust, Cargo, and platform-specific build dependencies.
+
+Install dependencies:
+
+```bash
+npm install
+```
+
+Run the desktop app in development mode:
+
+```bash
+npm run tauri dev
+```
+
+Runtime users should not run these commands and should not install conversion engines manually. They should install the packaged desktop app, which includes the required sidecar engines.
+
+## Build and Packaging
+
+Build the desktop app with the generic Tauri build command:
+
+```bash
+npm run tauri build
+```
+
+Packaging should focus on a complete offline installer:
+
+- Bundle sidecar conversion engines into the app package.
+- Resolve engine paths from the installed application bundle.
+- Include all runtime files needed for supported v1 conversions.
+- Verify that conversions work on a clean machine without manually installed conversion tools.
+- Verify that conversions work while the machine is offline.
+- Keep installer behavior platform-appropriate for macOS, Windows, and Linux.
+
+The packaging process should include a post-install smoke test pass that confirms the app can run supported conversions without network access.
+
+## Smoke Tests
+
+Before a release, verify these scenarios on a clean install.
+
+Office-to-PDF:
+
+- Convert a DOCX file to PDF.
+- Convert a PPTX file to PDF.
+- Convert an XLSX file to PDF.
+- Confirm each output PDF exists, is readable, and is written to the default `converted` folder.
+
+Image conversion:
+
+- Convert between common image formats.
+- Apply compression presets.
+- Resize images.
+- Remove EXIF metadata.
+- Confirm source images are unchanged.
+
+Images to PDF:
+
+- Select multiple images.
+- Preserve the selected order.
+- Generate a single PDF.
+- Confirm filename collision handling works.
+
+PDF operations:
+
+- Merge multiple PDFs.
+- Split a PDF.
+- Extract a page range.
+- Rotate pages.
+- Convert PDF pages to images.
+- Generate previews or thumbnails.
+
+Queue behavior:
+
+- Confirm status transitions for pending, running, succeeded, failed, cancelled, and retrying tasks.
+- Retry a failed task.
+- Cancel a pending task.
+- Cancel a running task and confirm child-process cleanup.
+- Open the output folder for a successful task.
+- Review the success and failure summary after a batch.
+
+Privacy checks:
+
+- Convert files while offline.
+- Confirm no upload is attempted.
+- Confirm no server is required.
+- Confirm no hidden source copies remain after success, failure, timeout, or cancellation.
+- Confirm failure logs contain diagnostics but do not retain source documents.
+
+Path handling:
+
+- Convert files from folders with spaces in their names.
+- Convert files from folders with CJK characters in their names.
+- Convert files with long filenames.
+- Confirm outputs are created with safe auto-incremented names.
+
+## Roadmap
+
+- Implement the v1 local conversion queue and default output rules.
+- Add reliable Office-to-PDF conversion with isolated LibreOffice execution.
+- Add image conversion, compression presets, resizing, EXIF removal, and images-to-PDF.
+- Add PDF merge, split, extraction, rotation, rasterization, and previews.
+- Add detailed per-task logs and batch summaries.
+- Add cross-platform packaging with bundled sidecar engines.
+- Add clean-install and offline release validation.
+- Expand supported formats only after the bundled local engine path is proven reliable.
+
+## Non-Goals
+
+The following are not current goals:
+
+- Video conversion. Do not implement it.
+- Audio conversion. Do not implement it.
+- Cloud conversion or cloud upload. Do not implement it.
+- Server-side conversion or hosted conversion workers. Do not implement them.
+- Accounts or sign-in.
+- Online storage.
+- Collaboration features.
+- Automatic source deletion.
+- In-place replacement of original files.
+- Requiring runtime users to install conversion engines manually.
