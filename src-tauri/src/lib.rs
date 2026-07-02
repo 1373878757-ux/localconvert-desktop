@@ -26,7 +26,7 @@ struct EngineStatus {
     name: &'static str,
     status: &'static str,
     required_for_v1: bool,
-    message: &'static str,
+    message: String,
 }
 
 #[derive(Deserialize)]
@@ -50,8 +50,11 @@ struct OutputPathPlan {
 
 #[tauri::command]
 fn engine_self_check() -> EngineSelfCheck {
+    let platform = current_platform_key();
+    let qpdf_status = qpdf::detect_qpdf_engine(&platform);
+
     EngineSelfCheck {
-        platform: current_platform_key(),
+        platform,
         full_edition: true,
         conversion_enabled: false,
         engines: vec![
@@ -59,25 +62,25 @@ fn engine_self_check() -> EngineSelfCheck {
                 name: "LibreOffice headless",
                 status: "not-installed",
                 required_for_v1: true,
-                message: "Not bundled yet.",
+                message: "Not bundled yet.".to_string(),
             },
             EngineStatus {
                 name: "qpdf",
-                status: "not-installed",
+                status: qpdf_status.status,
                 required_for_v1: true,
-                message: "Not bundled yet.",
+                message: qpdf_status.message,
             },
             EngineStatus {
                 name: "PDFium",
                 status: "not-installed",
                 required_for_v1: true,
-                message: "Not bundled yet.",
+                message: "Not bundled yet.".to_string(),
             },
             EngineStatus {
                 name: "image-engine",
                 status: "not-installed",
                 required_for_v1: true,
-                message: "Not bundled yet.",
+                message: "Not bundled yet.".to_string(),
             },
         ],
     }

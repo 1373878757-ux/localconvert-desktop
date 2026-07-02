@@ -1,8 +1,21 @@
 use serde::Deserialize;
-use std::path::Path;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 const QPDF_NOT_BUNDLED_ERROR: &str =
     "qpdf engine is not bundled yet. PDF structure operations are disabled until local engine assets are bundled.";
+
+const QPDF_ENGINE_MISSING_MESSAGE: &str = "Not bundled yet.";
+
+pub struct QpdfEngineDetection {
+    pub status: &'static str,
+    pub message: String,
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -72,8 +85,124 @@ pub fn qpdf_rotate_pages(request: QpdfRotatePagesRequest) -> Result<(), String> 
     Err(qpdf_not_bundled_error())
 }
 
+pub fn detect_qpdf_engine(platform: &str) -> QpdfEngineDetection {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let runtime_dir = std::env::current_exe()
+        .ok()
+        .and_then(|executable_path| executable_path.parent().map(Path::to_path_buf));
+    let candidates = qpdf_candidate_paths(platform, manifest_dir, runtime_dir.as_deref());
+
+    detect_qpdf_engine_from_candidates(platform, &candidates)
+}
+
 fn qpdf_not_bundled_error() -> String {
     QPDF_NOT_BUNDLED_ERROR.to_string()
+}
+
+fn detect_qpdf_engine_from_candidates(
+    platform: &str,
+    candidates: &[PathBuf],
+) -> QpdfEngineDetection {
+    let Some(candidate) = candidates.iter().find(|path| path.exists()) else {
+        return QpdfEngineDetection {
+            status: "not-installed",
+            message: QPDF_ENGINE_MISSING_MESSAGE.to_string(),
+        };
+    };
+
+    let candidate_display = path_to_string(candidate);
+    let Ok(metadata) = fs::metadata(candidate) else {
+        return QpdfEngineDetection {
+            status: "error",
+            message: format!("qpdf sidecar exists but could not be inspected: {candidate_display}"),
+        };
+    };
+
+    if !metadata.is_file() {
+        return QpdfEngineDetection {
+            status: "error",
+            message: format!("qpdf sidecar path is not a file: {candidate_display}"),
+        };
+    }
+
+    if requires_executable_permission(platform) && !is_executable(&metadata) {
+        return QpdfEngineDetection {
+            status: "error",
+            message: format!("qpdf sidecar is not executable: {candidate_display}"),
+        };
+    }
+
+    QpdfEngineDetection {
+        status: "available",
+        message: format!("qpdf sidecar detected: {candidate_display}"),
+    }
+}
+
+fn qpdf_candidate_paths(
+    platform: &str,
+    src_tauri_dir: &Path,
+    runtime_dir: Option<&Path>,
+) -> Vec<PathBuf> {
+    let mut paths = vec![
+        src_tauri_dir
+            .join("binaries")
+            .join(platform)
+            .join(qpdf_raw_filename(platform)),
+        src_tauri_dir
+            .join("binaries")
+            .join(platform)
+            .join(qpdf_prepared_filename(platform)),
+    ];
+
+    if let Some(runtime_dir) = runtime_dir {
+        paths.push(runtime_dir.join(qpdf_prepared_filename(platform)));
+        paths.push(runtime_dir.join(qpdf_raw_filename(platform)));
+    }
+
+    paths
+}
+
+fn qpdf_raw_filename(platform: &str) -> String {
+    if platform.starts_with("windows-") {
+        "qpdf.exe".to_string()
+    } else {
+        "qpdf".to_string()
+    }
+}
+
+fn qpdf_prepared_filename(platform: &str) -> String {
+    let extension = if platform.starts_with("windows-") {
+        ".exe"
+    } else {
+        ""
+    };
+
+    format!("qpdf-{}{}", target_triple(platform), extension)
+}
+
+fn target_triple(platform: &str) -> &'static str {
+    match platform {
+        "windows-x86_64" => "x86_64-pc-windows-msvc",
+        "windows-aarch64" => "aarch64-pc-windows-msvc",
+        "macos-aarch64" => "aarch64-apple-darwin",
+        "macos-x86_64" => "x86_64-apple-darwin",
+        "linux-x86_64" => "x86_64-unknown-linux-gnu",
+        _ => "unknown",
+    }
+}
+
+fn requires_executable_permission(platform: &str) -> bool {
+    platform.starts_with("macos-") || platform.starts_with("linux-")
+}
+
+#[cfg(unix)]
+fn is_executable(metadata: &fs::Metadata) -> bool {
+    metadata.permissions().mode() & 0o111 != 0
+}
+
+#[cfg(not(unix))]
+fn is_executable(_metadata: &fs::Metadata) -> bool {
+    true
 }
 
 fn build_qpdf_merge_arguments(request: &QpdfMergeRequest) -> Result<QpdfCommandPlan, String> {
@@ -248,6 +377,10 @@ fn path_to_string(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        fs::{self, File},
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     #[test]
     fn parses_page_ranges() {
@@ -359,6 +492,85 @@ mod tests {
                 "--rotate=+90:1,3-4",
             ]
         );
+    }
+
+    fn temp_fixture_path(name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "localconvert-qpdf-{name}-{}-{unique}",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn resolves_platform_qpdf_sidecar_paths() {
+        let base = Path::new("/app/src-tauri");
+
+        assert_eq!(qpdf_raw_filename("windows-x86_64"), "qpdf.exe");
+        assert_eq!(
+            qpdf_prepared_filename("windows-x86_64"),
+            "qpdf-x86_64-pc-windows-msvc.exe"
+        );
+        assert_eq!(
+            qpdf_prepared_filename("macos-aarch64"),
+            "qpdf-aarch64-apple-darwin"
+        );
+
+        let paths = qpdf_candidate_paths("macos-aarch64", base, Some(Path::new("/app/runtime")));
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from("/app/src-tauri/binaries/macos-aarch64/qpdf"),
+                PathBuf::from("/app/src-tauri/binaries/macos-aarch64/qpdf-aarch64-apple-darwin"),
+                PathBuf::from("/app/runtime/qpdf-aarch64-apple-darwin"),
+                PathBuf::from("/app/runtime/qpdf"),
+            ]
+        );
+    }
+
+    #[test]
+    fn missing_qpdf_sidecar_returns_not_installed() {
+        let missing = temp_fixture_path("missing");
+        let detection = detect_qpdf_engine_from_candidates("macos-aarch64", &[missing]);
+
+        assert_eq!(detection.status, "not-installed");
+        assert_eq!(detection.message, QPDF_ENGINE_MISSING_MESSAGE);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_executable_qpdf_sidecar_returns_error_on_unix() {
+        let fixture = temp_fixture_path("non-executable");
+        File::create(&fixture).expect("test qpdf fixture should be created");
+        fs::set_permissions(&fixture, fs::Permissions::from_mode(0o644))
+            .expect("test fixture permissions should be set");
+
+        let detection = detect_qpdf_engine_from_candidates("macos-aarch64", &[fixture.clone()]);
+
+        assert_eq!(detection.status, "error");
+        assert!(detection.message.contains("not executable"));
+
+        let _ = fs::remove_file(fixture);
+    }
+
+    #[test]
+    fn executable_qpdf_fixture_returns_available() {
+        let fixture = temp_fixture_path("available");
+        File::create(&fixture).expect("test qpdf fixture should be created");
+
+        #[cfg(unix)]
+        fs::set_permissions(&fixture, fs::Permissions::from_mode(0o755))
+            .expect("test fixture permissions should be set");
+
+        let detection = detect_qpdf_engine_from_candidates("macos-aarch64", &[fixture.clone()]);
+
+        assert_eq!(detection.status, "available");
+        assert!(detection.message.contains("qpdf sidecar detected"));
+
+        let _ = fs::remove_file(fixture);
     }
 
     #[test]
