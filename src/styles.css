@@ -79,6 +79,23 @@ button:disabled {
   font-weight: 700;
 }
 
+.extract-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.page-range-input {
+  width: 92px;
+  min-height: 26px;
+  border: 1px solid #c9d2dc;
+  border-radius: 6px;
+  padding: 0 8px;
+  color: #243444;
+  background: #ffffff;
+  font-size: 0.78rem;
+}
+
 .app-shell {
   min-height: 100vh;
   display: grid;

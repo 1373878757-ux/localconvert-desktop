@@ -65,6 +65,20 @@ type QpdfSplitResult = {
   message: string;
 };
 
+type QpdfExtractResult = {
+  success: boolean;
+  operation: "extract";
+  sourcePath: string;
+  outputPath: string;
+  outputBytes: number;
+  pages: string;
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+  timedOut: boolean;
+  message: string;
+};
+
 type QpdfRotateResult = {
   success: boolean;
   operation: "rotate";
@@ -141,6 +155,7 @@ function App() {
   const [activeTool, setActiveTool] = useState("Batch Queue");
   const [dragActive, setDragActive] = useState(false);
   const [folderMessage, setFolderMessage] = useState("");
+  const [extractPageRanges, setExtractPageRanges] = useState<Record<string, string>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -272,6 +287,20 @@ function App() {
     ].join("\n");
   }
 
+  function formatExtractLog(result: QpdfExtractResult) {
+    return [
+      result.message,
+      `Source: ${result.sourcePath || "not available"}`,
+      `Output: ${result.outputPath || "not written"}`,
+      `Output bytes: ${result.outputBytes}`,
+      `Pages: ${result.pages || "not selected"}`,
+      `Exit code: ${result.exitCode ?? "none"}`,
+      `Timed out: ${result.timedOut ? "yes" : "no"}`,
+      result.stdout ? `stdout:\n${result.stdout}` : "stdout: <empty>",
+      result.stderr ? `stderr:\n${result.stderr}` : "stderr: <empty>"
+    ].join("\n");
+  }
+
   function formatRotateLog(result: QpdfRotateResult) {
     return [
       result.message,
@@ -298,6 +327,10 @@ function App() {
   }
 
   function canRotatePdfTask(task: LocalTask) {
+    return canSplitPdfTask(task);
+  }
+
+  function canExtractPdfTask(task: LocalTask) {
     return canSplitPdfTask(task);
   }
 
@@ -547,6 +580,88 @@ function App() {
     }
   }
 
+  async function extractPdfPages(task: LocalTask) {
+    if (!canExtractPdfTask(task) || !task.sourcePath) {
+      setFolderMessage(
+        "PDF page extraction requires bundled qpdf and one local PDF file with a real path."
+      );
+      return;
+    }
+
+    const pages = (extractPageRanges[task.id] || "").trim();
+    if (!pages) {
+      setFolderMessage("Enter a page range before extracting pages, for example 1,3,5-7.");
+      return;
+    }
+
+    setTasks((currentTasks) =>
+      currentTasks.map((currentTask) =>
+        currentTask.id === task.id
+          ? {
+              ...currentTask,
+              status: "converting",
+              errorLog: ""
+            }
+          : currentTask
+      )
+    );
+
+    try {
+      const outputSource = buildSiblingPath(
+        task.sourcePath,
+        `${getBaseName(task.displayName)} extracted.pdf`
+      );
+      const outputPlan = await invoke<OutputPathPlan>("plan_output_path", {
+        request: {
+          source: outputSource,
+          targetExtension: "pdf",
+          outputStrategy: "converted-folder-next-to-source"
+        }
+      });
+      const result = await invoke<QpdfExtractResult>("qpdf_extract_pages", {
+        request: {
+          source: task.sourcePath,
+          pages,
+          output: outputPlan.plannedOutputPath
+        }
+      });
+      const log = formatExtractLog(result);
+
+      setTasks((currentTasks) =>
+        currentTasks.map((currentTask) =>
+          currentTask.id === task.id
+            ? {
+                ...currentTask,
+                status: result.success ? "completed" : "failed",
+                outputPreview: result.success ? result.outputPath : task.outputPreview,
+                errorLog: result.success ? "" : log
+              }
+            : currentTask
+        )
+      );
+      setFolderMessage(
+        result.success
+          ? `PDF page extraction completed locally: ${result.outputPath}`
+          : "PDF page extraction failed locally. See the error log."
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "PDF page extraction failed locally.";
+      setTasks((currentTasks) =>
+        currentTasks.map((currentTask) =>
+          currentTask.id === task.id
+            ? {
+                ...currentTask,
+                status: "failed",
+                errorLog: message
+              }
+            : currentTask
+        )
+      );
+      setFolderMessage("PDF page extraction failed locally. See the error log.");
+    }
+  }
+
   async function rotatePdfTask(task: LocalTask, degrees: 90 | 180 | -90) {
     if (!canRotatePdfTask(task) || !task.sourcePath) {
       setFolderMessage(
@@ -635,7 +750,7 @@ function App() {
           <span>No upload</span>
           <span>Local queue</span>
           <span>
-            {qpdfAvailable ? "PDF merge/split/rotate enabled" : "Conversion disabled"}
+            {qpdfAvailable ? "PDF qpdf tools enabled" : "Conversion disabled"}
           </span>
         </div>
       </header>
@@ -833,6 +948,35 @@ function App() {
                         </button>
                       ) : null}
                       {task.extension === "pdf" && task.sourcePath ? (
+                        <span className="extract-control">
+                          <input
+                            aria-label={`Pages to extract from ${task.displayName}`}
+                            className="page-range-input"
+                            placeholder="1,3,5-7"
+                            value={extractPageRanges[task.id] || ""}
+                            onChange={(event) =>
+                              setExtractPageRanges((currentRanges) => ({
+                                ...currentRanges,
+                                [task.id]: event.currentTarget.value
+                              }))
+                            }
+                          />
+                          <button
+                            type="button"
+                            className="small-button"
+                            onClick={() => void extractPdfPages(task)}
+                            disabled={!canExtractPdfTask(task)}
+                            title={
+                              qpdfAvailable
+                                ? "Extract selected pages from this one local PDF with bundled qpdf."
+                                : "Bundled qpdf must be available before PDF page extraction can run."
+                            }
+                          >
+                            Extract Pages
+                          </button>
+                        </span>
+                      ) : null}
+                      {task.extension === "pdf" && task.sourcePath ? (
                         <>
                           <span className="action-label">Rotate</span>
                           <button
@@ -921,7 +1065,7 @@ function App() {
             <h2>Engine status</h2>
             <p>
               {qpdfAvailable
-                ? "PDF merge, split, and rotate are enabled locally with bundled qpdf. Other conversions remain disabled."
+                ? "PDF merge, split, page extraction, and rotate are enabled locally with bundled qpdf. Other conversions remain disabled."
                 : "Conversion engines are not bundled yet."}
             </p>
             <dl className="engine-list">
@@ -938,7 +1082,7 @@ function App() {
             <h2>Error log</h2>
             <pre className="log-box">
               {selectedTaskWithError?.errorLog ||
-                "No error log. Failed PDF merge, split, rotate, or demo tasks appear here."}
+                "No error log. Failed PDF merge, split, page extraction, rotate, or demo tasks appear here."}
             </pre>
           </section>
 
@@ -946,7 +1090,7 @@ function App() {
             <h2>Local privacy</h2>
             <ul>
               <li>No upload.</li>
-              <li>PDF merge, split, and rotate run with bundled local qpdf only.</li>
+              <li>PDF merge, split, page extraction, and rotate run with bundled local qpdf only.</li>
               <li>Other conversion operations remain disabled.</li>
             </ul>
           </section>

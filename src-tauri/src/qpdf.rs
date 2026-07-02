@@ -12,12 +12,10 @@ use std::{
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
-const QPDF_EXECUTION_DISABLED_ERROR: &str =
-    "This qpdf operation is not enabled yet. Only PDF merge, split, and rotate are enabled.";
-
 const QPDF_ENGINE_MISSING_MESSAGE: &str = "Not bundled yet.";
 const QPDF_MERGE_TIMEOUT_SECONDS: u64 = 120;
 const QPDF_SPLIT_TIMEOUT_SECONDS: u64 = 120;
+const QPDF_EXTRACT_TIMEOUT_SECONDS: u64 = 120;
 const QPDF_ROTATE_TIMEOUT_SECONDS: u64 = 120;
 
 pub struct QpdfEngineDetection {
@@ -95,6 +93,22 @@ pub struct QpdfSplitResult {
 
 #[derive(Serialize, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct QpdfExtractResult {
+    success: bool,
+    operation: &'static str,
+    source_path: String,
+    output_path: String,
+    output_bytes: u64,
+    pages: String,
+    stdout: String,
+    stderr: String,
+    exit_code: Option<i32>,
+    timed_out: bool,
+    message: String,
+}
+
+#[derive(Serialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct QpdfRotateResult {
     success: bool,
     operation: &'static str,
@@ -160,9 +174,24 @@ pub fn qpdf_split_pdf(request: QpdfSplitRequest) -> QpdfSplitResult {
 }
 
 #[tauri::command]
-pub fn qpdf_extract_pages(request: QpdfExtractPagesRequest) -> Result<(), String> {
-    build_qpdf_extract_arguments(&request)?;
-    Err(qpdf_execution_disabled_error())
+pub fn qpdf_extract_pages(request: QpdfExtractPagesRequest) -> QpdfExtractResult {
+    let source_path = request.source.trim().to_string();
+    let output_path = request.output.trim().to_string();
+    let pages = normalize_page_ranges(&request.pages).unwrap_or_default();
+
+    execute_qpdf_extract(&request).unwrap_or_else(|message| QpdfExtractResult {
+        success: false,
+        operation: "extract",
+        source_path,
+        output_path,
+        output_bytes: 0,
+        pages,
+        stdout: String::new(),
+        stderr: String::new(),
+        exit_code: None,
+        timed_out: false,
+        message,
+    })
 }
 
 #[tauri::command]
@@ -196,10 +225,6 @@ pub fn detect_qpdf_engine(platform: &str) -> QpdfEngineDetection {
     let candidates = qpdf_candidate_paths(platform, manifest_dir, runtime_dir.as_deref());
 
     detect_qpdf_engine_from_candidates(platform, &candidates, run_qpdf_version_smoke_check)
-}
-
-fn qpdf_execution_disabled_error() -> String {
-    QPDF_EXECUTION_DISABLED_ERROR.to_string()
 }
 
 fn execute_qpdf_merge(request: &QpdfMergeRequest) -> Result<QpdfMergeResult, String> {
@@ -436,6 +461,119 @@ fn execute_qpdf_split(request: &QpdfSplitRequest) -> Result<QpdfSplitResult, Str
     })
 }
 
+fn execute_qpdf_extract(request: &QpdfExtractPagesRequest) -> Result<QpdfExtractResult, String> {
+    build_qpdf_extract_arguments(request)?;
+    let source = validate_pdf_path(&request.source, "Source PDF")?;
+    let source_path = PathBuf::from(&source);
+    let requested_output = PathBuf::from(validate_pdf_path(&request.output, "Output PDF")?);
+    let pages = normalize_page_ranges(&request.pages)?;
+
+    validate_source_pdf_file(&source_path)?;
+    validate_single_pdf_output_location(&source_path, &requested_output)?;
+
+    let output_path = collision_safe_pdf_output_path(&requested_output)?;
+    let plan = build_qpdf_extract_arguments_for_output(&source, &pages, &output_path)?;
+
+    let platform = current_platform_key();
+    let qpdf_path = resolve_qpdf_sidecar_path(platform)?;
+    let output_parent = output_path
+        .parent()
+        .ok_or_else(|| "Output PDF must have a converted output folder.".to_string())?;
+    fs::create_dir_all(output_parent).map_err(|error| {
+        format!(
+            "Unable to create converted output folder {}: {error}",
+            path_to_string(output_parent)
+        )
+    })?;
+
+    if output_path.exists() {
+        return Err(format!(
+            "Output PDF already exists and will not be overwritten: {}",
+            path_to_string(&output_path)
+        ));
+    }
+
+    let execution = run_qpdf_command(
+        &qpdf_path,
+        &plan.arguments,
+        Duration::from_secs(QPDF_EXTRACT_TIMEOUT_SECONDS),
+    )?;
+
+    if execution.timed_out {
+        remove_partial_output(&output_path);
+        return Ok(QpdfExtractResult {
+            success: false,
+            operation: "extract",
+            source_path: path_to_string(&source_path),
+            output_path: path_to_string(&output_path),
+            output_bytes: 0,
+            pages,
+            stdout: execution.stdout,
+            stderr: execution.stderr,
+            exit_code: execution.exit_code,
+            timed_out: true,
+            message: format!(
+                "qpdf page extraction timed out after {QPDF_EXTRACT_TIMEOUT_SECONDS} seconds."
+            ),
+        });
+    }
+
+    if execution.exit_code != Some(0) {
+        remove_partial_output(&output_path);
+        return Ok(QpdfExtractResult {
+            success: false,
+            operation: "extract",
+            source_path: path_to_string(&source_path),
+            output_path: path_to_string(&output_path),
+            output_bytes: 0,
+            pages,
+            stdout: execution.stdout,
+            stderr: execution.stderr,
+            exit_code: execution.exit_code,
+            timed_out: false,
+            message: "qpdf page extraction failed.".to_string(),
+        });
+    }
+
+    let output_metadata = fs::metadata(&output_path).map_err(|error| {
+        format!(
+            "qpdf reported success, but extracted output PDF is missing: {}: {error}",
+            path_to_string(&output_path)
+        )
+    })?;
+
+    if output_metadata.len() == 0 {
+        remove_partial_output(&output_path);
+        return Ok(QpdfExtractResult {
+            success: false,
+            operation: "extract",
+            source_path: path_to_string(&source_path),
+            output_path: path_to_string(&output_path),
+            output_bytes: 0,
+            pages,
+            stdout: execution.stdout,
+            stderr: execution.stderr,
+            exit_code: execution.exit_code,
+            timed_out: false,
+            message: "qpdf reported success, but extracted output PDF is empty.".to_string(),
+        });
+    }
+
+    Ok(QpdfExtractResult {
+        success: true,
+        operation: "extract",
+        source_path: path_to_string(&source_path),
+        output_path: path_to_string(&output_path),
+        output_bytes: output_metadata.len(),
+        pages,
+        stdout: execution.stdout,
+        stderr: execution.stderr,
+        exit_code: execution.exit_code,
+        timed_out: false,
+        message: "PDF page extraction completed locally with bundled qpdf.".to_string(),
+    })
+}
+
 fn execute_qpdf_rotate(request: &QpdfRotatePagesRequest) -> Result<QpdfRotateResult, String> {
     build_qpdf_rotate_arguments(request)?;
     let source = validate_pdf_path(&request.source, "Source PDF")?;
@@ -445,7 +583,7 @@ fn execute_qpdf_rotate(request: &QpdfRotatePagesRequest) -> Result<QpdfRotateRes
     let pages = normalize_optional_page_ranges(&request.pages)?;
 
     validate_source_pdf_file(&source_path)?;
-    validate_rotate_output_location(&source_path, &requested_output)?;
+    validate_single_pdf_output_location(&source_path, &requested_output)?;
 
     let output_path = collision_safe_pdf_output_path(&requested_output)?;
     let plan = build_qpdf_rotate_arguments_for_output(&source, &output_path, &degrees, &pages)?;
@@ -806,15 +944,26 @@ fn build_qpdf_split_arguments_for_pattern(
 fn build_qpdf_extract_arguments(
     request: &QpdfExtractPagesRequest,
 ) -> Result<QpdfCommandPlan, String> {
-    let source = validate_path_like(&request.source, "Source PDF")?;
-    let output = validate_path_like(&request.output, "Output PDF")?;
+    let source = validate_pdf_path(&request.source, "Source PDF")?;
+    let output = validate_pdf_path(&request.output, "Output PDF")?;
     let pages = normalize_page_ranges(&request.pages)?;
+
+    build_qpdf_extract_arguments_for_output(&source, &pages, Path::new(&output))
+}
+
+fn build_qpdf_extract_arguments_for_output(
+    source: &str,
+    pages: &str,
+    output: &Path,
+) -> Result<QpdfCommandPlan, String> {
+    let source = validate_pdf_path(source, "Source PDF")?;
+    let output = validate_pdf_path(&path_to_string(output), "Output PDF")?;
 
     Ok(qpdf_plan(vec![
         source,
         "--pages".to_string(),
         ".".to_string(),
-        pages,
+        pages.to_string(),
         "--".to_string(),
         output,
     ]))
@@ -996,7 +1145,10 @@ fn validate_split_output_location(
     Ok(())
 }
 
-fn validate_rotate_output_location(source_path: &Path, output_path: &Path) -> Result<(), String> {
+fn validate_single_pdf_output_location(
+    source_path: &Path,
+    output_path: &Path,
+) -> Result<(), String> {
     validate_merge_output_path_shape(output_path)?;
 
     let source_parent = source_path
@@ -1664,6 +1816,98 @@ mod tests {
     }
 
     #[test]
+    fn rejects_invalid_extract_requests() {
+        let empty_source = build_qpdf_extract_arguments(&QpdfExtractPagesRequest {
+            source: " ".to_string(),
+            pages: "1".to_string(),
+            output: "/Users/mac/Desktop/converted/extracted.pdf".to_string(),
+        });
+        assert_eq!(
+            empty_source,
+            Err("Source PDF path is required.".to_string())
+        );
+
+        let empty_pages = build_qpdf_extract_arguments(&QpdfExtractPagesRequest {
+            source: "/Users/mac/Desktop/report.pdf".to_string(),
+            pages: " ".to_string(),
+            output: "/Users/mac/Desktop/converted/extracted.pdf".to_string(),
+        });
+        assert_eq!(empty_pages, Err("Page range is required.".to_string()));
+
+        let invalid_page_range = build_qpdf_extract_arguments(&QpdfExtractPagesRequest {
+            source: "/Users/mac/Desktop/report.pdf".to_string(),
+            pages: "1,,3".to_string(),
+            output: "/Users/mac/Desktop/converted/extracted.pdf".to_string(),
+        });
+        assert_eq!(
+            invalid_page_range,
+            Err("Page range contains an empty segment.".to_string())
+        );
+
+        let non_pdf_source = build_qpdf_extract_arguments(&QpdfExtractPagesRequest {
+            source: "/Users/mac/Desktop/report.docx".to_string(),
+            pages: "1".to_string(),
+            output: "/Users/mac/Desktop/converted/extracted.pdf".to_string(),
+        });
+        assert_eq!(
+            non_pdf_source,
+            Err("Source PDF must use a .pdf extension: /Users/mac/Desktop/report.docx".to_string())
+        );
+
+        let non_pdf_output = build_qpdf_extract_arguments(&QpdfExtractPagesRequest {
+            source: "/Users/mac/Desktop/report.pdf".to_string(),
+            pages: "1".to_string(),
+            output: "/Users/mac/Desktop/converted/extracted.txt".to_string(),
+        });
+        assert_eq!(
+            non_pdf_output,
+            Err(
+                "Output PDF must use a .pdf extension: /Users/mac/Desktop/converted/extracted.txt"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn rejects_missing_extract_source_file() {
+        let case_dir = temp_fixture_path("missing-extract-source");
+        let result = qpdf_extract_pages(QpdfExtractPagesRequest {
+            source: path_to_string(&case_dir.join("missing.pdf")),
+            pages: "1".to_string(),
+            output: path_to_string(&case_dir.join("converted").join("missing extracted.pdf")),
+        });
+
+        assert!(!result.success);
+        assert!(result.message.contains("Source PDF does not exist"));
+    }
+
+    #[test]
+    fn plans_collision_safe_extract_output_without_overwrite() {
+        let case_dir = temp_fixture_path("extract-collision");
+        let converted_dir = case_dir.join("converted");
+        fs::create_dir_all(&converted_dir).expect("converted test directory should be created");
+        let output = converted_dir.join("report extracted.pdf");
+        let first_collision = converted_dir.join("report extracted (1).pdf");
+        fs::write(&output, b"existing").expect("existing extract output should be written");
+        fs::write(&first_collision, b"existing")
+            .expect("existing extract collision output should be written");
+
+        let planned_output = collision_safe_pdf_output_path(&output)
+            .expect("collision-safe extract output should be planned");
+
+        assert_eq!(
+            planned_output,
+            converted_dir.join("report extracted (2).pdf")
+        );
+        assert_eq!(
+            fs::read(&output).expect("existing output should remain readable"),
+            b"existing"
+        );
+
+        let _ = fs::remove_dir_all(case_dir);
+    }
+
+    #[test]
     fn plans_rotate_arguments_with_chinese_and_spaces() {
         let plan = build_qpdf_rotate_arguments(&QpdfRotatePagesRequest {
             source: "/Users/mac/Desktop/客户 文件/扫描 件.pdf".to_string(),
@@ -1891,6 +2135,28 @@ mod tests {
         fs::write(path, data).expect("tiny PDF fixture should be written");
     }
 
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    fn qpdf_page_count(path: &Path) -> usize {
+        let qpdf = resolve_qpdf_sidecar_path("macos-aarch64")
+            .expect("bundled qpdf sidecar should resolve");
+        let output = std::process::Command::new(qpdf)
+            .arg("--show-npages")
+            .arg(path)
+            .output()
+            .expect("qpdf page count command should run");
+
+        assert!(
+            output.status.success(),
+            "qpdf page count failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .parse::<usize>()
+            .expect("qpdf page count output should be numeric")
+    }
+
     #[test]
     fn resolves_platform_qpdf_sidecar_paths() {
         let base = Path::new("/app/src-tauri");
@@ -2034,6 +2300,69 @@ mod tests {
 
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     #[test]
+    fn qpdf_extract_execution_writes_only_planned_output() {
+        let case_dir = temp_fixture_path("execute-extract");
+        fs::create_dir_all(&case_dir).expect("extract smoke directory should be created");
+        let source = case_dir.join("客户 文件.pdf");
+        let output = case_dir.join("converted").join("客户 文件 extracted.pdf");
+        write_tiny_pdf_pages(&source, &["One", "Two", "Three", "Four"]);
+        let source_before = fs::read(&source).expect("source should be readable");
+
+        let result = qpdf_extract_pages(QpdfExtractPagesRequest {
+            source: path_to_string(&source),
+            pages: "1,3".to_string(),
+            output: path_to_string(&output),
+        });
+
+        assert!(result.success, "{}", result.message);
+        assert_eq!(result.source_path, path_to_string(&source));
+        assert_eq!(result.output_path, path_to_string(&output));
+        assert_eq!(result.pages, "1,3");
+        assert!(result.output_bytes > 0);
+        assert!(output.exists());
+        assert_eq!(qpdf_page_count(&output), 2);
+        assert_eq!(
+            fs::read(&source).expect("source should remain readable"),
+            source_before
+        );
+
+        let _ = fs::remove_dir_all(case_dir);
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[test]
+    fn qpdf_extract_execution_avoids_overwriting_existing_output() {
+        let case_dir = temp_fixture_path("execute-extract-collision");
+        let converted_dir = case_dir.join("converted");
+        fs::create_dir_all(&converted_dir).expect("converted directory should be created");
+        let source = case_dir.join("report.pdf");
+        let desired_output = converted_dir.join("report extracted.pdf");
+        write_tiny_pdf_pages(&source, &["One", "Two", "Three"]);
+        fs::write(&desired_output, b"keep me")
+            .expect("existing extract output fixture should be written");
+
+        let result = qpdf_extract_pages(QpdfExtractPagesRequest {
+            source: path_to_string(&source),
+            pages: "2-3".to_string(),
+            output: path_to_string(&desired_output),
+        });
+
+        assert!(result.success, "{}", result.message);
+        assert_eq!(
+            fs::read(&desired_output).expect("existing output should remain readable"),
+            b"keep me"
+        );
+        assert_eq!(
+            result.output_path,
+            path_to_string(&converted_dir.join("report extracted (1).pdf"))
+        );
+        assert_eq!(qpdf_page_count(Path::new(&result.output_path)), 2);
+
+        let _ = fs::remove_dir_all(case_dir);
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[test]
     fn qpdf_split_execution_writes_outputs_only_in_converted() {
         let case_dir = temp_fixture_path("execute-split");
         fs::create_dir_all(&case_dir).expect("split smoke directory should be created");
@@ -2161,17 +2490,6 @@ mod tests {
         assert!(Path::new(&result.output_path).exists());
 
         let _ = fs::remove_dir_all(case_dir);
-    }
-
-    #[test]
-    fn valid_command_requests_return_execution_disabled_error() {
-        let result = qpdf_extract_pages(QpdfExtractPagesRequest {
-            source: "/Users/mac/Desktop/report.pdf".to_string(),
-            pages: "1".to_string(),
-            output: "/Users/mac/Desktop/converted/report.pdf".to_string(),
-        });
-
-        assert_eq!(result, Err(qpdf_execution_disabled_error()));
     }
 
     #[test]
