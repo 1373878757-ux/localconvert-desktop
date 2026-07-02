@@ -2,13 +2,14 @@ use serde::Deserialize;
 use std::{
     fs,
     path::{Path, PathBuf},
+    process::Command,
 };
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
-const QPDF_NOT_BUNDLED_ERROR: &str =
-    "qpdf engine is not bundled yet. PDF structure operations are disabled until local engine assets are bundled.";
+const QPDF_EXECUTION_DISABLED_ERROR: &str =
+    "qpdf engine smoke checks are enabled, but PDF output-writing operations are not enabled yet.";
 
 const QPDF_ENGINE_MISSING_MESSAGE: &str = "Not bundled yet.";
 
@@ -64,25 +65,25 @@ struct PageRange {
 #[tauri::command]
 pub fn qpdf_merge_pdfs(request: QpdfMergeRequest) -> Result<(), String> {
     build_qpdf_merge_arguments(&request)?;
-    Err(qpdf_not_bundled_error())
+    Err(qpdf_execution_disabled_error())
 }
 
 #[tauri::command]
 pub fn qpdf_split_pdf(request: QpdfSplitRequest) -> Result<(), String> {
     build_qpdf_split_arguments(&request)?;
-    Err(qpdf_not_bundled_error())
+    Err(qpdf_execution_disabled_error())
 }
 
 #[tauri::command]
 pub fn qpdf_extract_pages(request: QpdfExtractPagesRequest) -> Result<(), String> {
     build_qpdf_extract_arguments(&request)?;
-    Err(qpdf_not_bundled_error())
+    Err(qpdf_execution_disabled_error())
 }
 
 #[tauri::command]
 pub fn qpdf_rotate_pages(request: QpdfRotatePagesRequest) -> Result<(), String> {
     build_qpdf_rotate_arguments(&request)?;
-    Err(qpdf_not_bundled_error())
+    Err(qpdf_execution_disabled_error())
 }
 
 pub fn detect_qpdf_engine(platform: &str) -> QpdfEngineDetection {
@@ -92,17 +93,21 @@ pub fn detect_qpdf_engine(platform: &str) -> QpdfEngineDetection {
         .and_then(|executable_path| executable_path.parent().map(Path::to_path_buf));
     let candidates = qpdf_candidate_paths(platform, manifest_dir, runtime_dir.as_deref());
 
-    detect_qpdf_engine_from_candidates(platform, &candidates)
+    detect_qpdf_engine_from_candidates(platform, &candidates, run_qpdf_version_smoke_check)
 }
 
-fn qpdf_not_bundled_error() -> String {
-    QPDF_NOT_BUNDLED_ERROR.to_string()
+fn qpdf_execution_disabled_error() -> String {
+    QPDF_EXECUTION_DISABLED_ERROR.to_string()
 }
 
-fn detect_qpdf_engine_from_candidates(
+fn detect_qpdf_engine_from_candidates<F>(
     platform: &str,
     candidates: &[PathBuf],
-) -> QpdfEngineDetection {
+    smoke_check: F,
+) -> QpdfEngineDetection
+where
+    F: Fn(&Path) -> Result<String, String>,
+{
     let Some(candidate) = candidates.iter().find(|path| path.exists()) else {
         return QpdfEngineDetection {
             status: "not-installed",
@@ -132,10 +137,53 @@ fn detect_qpdf_engine_from_candidates(
         };
     }
 
+    let version = match smoke_check(candidate) {
+        Ok(version) => version,
+        Err(error) => {
+            return QpdfEngineDetection {
+                status: "error",
+                message: format!("qpdf sidecar smoke check failed: {error}"),
+            };
+        }
+    };
+
     QpdfEngineDetection {
         status: "available",
-        message: format!("qpdf sidecar detected: {candidate_display}"),
+        message: format!("qpdf sidecar smoke check passed: {version} at {candidate_display}"),
     }
+}
+
+fn run_qpdf_version_smoke_check(path: &Path) -> Result<String, String> {
+    let output = Command::new(path)
+        .arg("--version")
+        .output()
+        .map_err(|error| {
+            format!(
+                "unable to run qpdf --version for {}: {error}",
+                path_to_string(path)
+            )
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(format!(
+            "qpdf --version exited with status {}{}",
+            output.status,
+            if stderr.is_empty() {
+                String::new()
+            } else {
+                format!(": {stderr}")
+            }
+        ));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let version_line = stdout
+        .lines()
+        .find(|line| line.starts_with("qpdf version "))
+        .ok_or_else(|| "qpdf --version did not return a qpdf version line".to_string())?;
+
+    Ok(version_line.to_string())
 }
 
 fn qpdf_candidate_paths(
@@ -534,7 +582,9 @@ mod tests {
     #[test]
     fn missing_qpdf_sidecar_returns_not_installed() {
         let missing = temp_fixture_path("missing");
-        let detection = detect_qpdf_engine_from_candidates("macos-aarch64", &[missing]);
+        let detection = detect_qpdf_engine_from_candidates("macos-aarch64", &[missing], |_| {
+            panic!("smoke check should not run for a missing sidecar")
+        });
 
         assert_eq!(detection.status, "not-installed");
         assert_eq!(detection.message, QPDF_ENGINE_MISSING_MESSAGE);
@@ -548,7 +598,10 @@ mod tests {
         fs::set_permissions(&fixture, fs::Permissions::from_mode(0o644))
             .expect("test fixture permissions should be set");
 
-        let detection = detect_qpdf_engine_from_candidates("macos-aarch64", &[fixture.clone()]);
+        let detection =
+            detect_qpdf_engine_from_candidates("macos-aarch64", &[fixture.clone()], |_| {
+                panic!("smoke check should not run for a non-executable sidecar")
+            });
 
         assert_eq!(detection.status, "error");
         assert!(detection.message.contains("not executable"));
@@ -565,23 +618,57 @@ mod tests {
         fs::set_permissions(&fixture, fs::Permissions::from_mode(0o755))
             .expect("test fixture permissions should be set");
 
-        let detection = detect_qpdf_engine_from_candidates("macos-aarch64", &[fixture.clone()]);
+        let detection =
+            detect_qpdf_engine_from_candidates("macos-aarch64", &[fixture.clone()], |_| {
+                Ok("qpdf version 12.3.2".to_string())
+            });
 
         assert_eq!(detection.status, "available");
-        assert!(detection.message.contains("qpdf sidecar detected"));
+        assert!(detection
+            .message
+            .contains("qpdf sidecar smoke check passed"));
 
         let _ = fs::remove_file(fixture);
     }
 
     #[test]
-    fn valid_command_requests_return_not_bundled_error() {
+    fn smoke_failure_returns_error() {
+        let fixture = temp_fixture_path("smoke-failure");
+        File::create(&fixture).expect("test qpdf fixture should be created");
+
+        #[cfg(unix)]
+        fs::set_permissions(&fixture, fs::Permissions::from_mode(0o755))
+            .expect("test fixture permissions should be set");
+
+        let detection =
+            detect_qpdf_engine_from_candidates("macos-aarch64", &[fixture.clone()], |_| {
+                Err("bad version output".to_string())
+            });
+
+        assert_eq!(detection.status, "error");
+        assert!(detection.message.contains("smoke check failed"));
+
+        let _ = fs::remove_file(fixture);
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[test]
+    fn bundled_macos_aarch64_qpdf_sidecar_passes_version_smoke_check() {
+        let detection = detect_qpdf_engine("macos-aarch64");
+
+        assert_eq!(detection.status, "available");
+        assert!(detection.message.contains("qpdf version 12.3.2"));
+    }
+
+    #[test]
+    fn valid_command_requests_return_execution_disabled_error() {
         let result = qpdf_extract_pages(QpdfExtractPagesRequest {
             source: "/Users/mac/Desktop/report.pdf".to_string(),
             pages: "1".to_string(),
             output: "/Users/mac/Desktop/converted/report.pdf".to_string(),
         });
 
-        assert_eq!(result, Err(qpdf_not_bundled_error()));
+        assert_eq!(result, Err(qpdf_execution_disabled_error()));
     }
 
     #[test]

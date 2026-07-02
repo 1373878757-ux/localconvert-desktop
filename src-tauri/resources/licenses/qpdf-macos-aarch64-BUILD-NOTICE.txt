@@ -1,0 +1,30 @@
+LocalConvert Desktop qpdf sidecar notice
+
+Engine: qpdf
+Version: 12.3.2
+Platform: macos-aarch64
+License: Apache-2.0
+
+Source distribution:
+https://github.com/qpdf/qpdf/releases/download/v12.3.2/qpdf-12.3.2.tar.gz
+
+Local sidecar artifact:
+src-tauri/binaries/macos-aarch64/qpdf
+
+Build notes:
+This qpdf command-line sidecar was built on macOS Apple Silicon from the
+official qpdf 12.3.2 source distribution. It links qpdf and its non-system
+dependencies statically, and links only macOS system libraries dynamically.
+
+Static link inputs used for this local sidecar build:
+- qpdf 12.3.2 static library
+- jpeg-turbo 3.2.0 static library
+- OpenSSL 3.6.3 libcrypto static library
+
+Bundled qpdf license files:
+- src-tauri/resources/licenses/qpdf-12.3.2-LICENSE.txt
+- src-tauri/resources/licenses/qpdf-12.3.2-NOTICE.md
+
+This integration enables qpdf engine detection and version smoke checking only.
+PDF output-writing operations remain disabled until explicitly enabled in a
+future implementation step.

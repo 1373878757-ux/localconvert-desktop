@@ -36,6 +36,6 @@
       "icons/icon.ico",
       "icons/icon.png"
     ],
-    "externalBin": []
+    "externalBin": ["binaries/macos-aarch64/qpdf"]
   }
 }

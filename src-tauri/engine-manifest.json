@@ -92,5 +92,16 @@
     "font",
     "license"
   ],
-  "assets": []
+  "assets": [
+    {
+      "name": "qpdf",
+      "version": "12.3.2",
+      "platform": "macos-aarch64",
+      "type": "sidecar",
+      "source": "https://github.com/qpdf/qpdf/releases/download/v12.3.2/qpdf-12.3.2.tar.gz",
+      "sha256": "4d32d1ea36dfaec46ea1dda4d57bd4ffe2c2af8c6f9268167d313bbdfa98a790",
+      "license": "Apache-2.0; see src-tauri/resources/licenses/qpdf-12.3.2-LICENSE.txt, src-tauri/resources/licenses/qpdf-12.3.2-NOTICE.md, and src-tauri/resources/licenses/qpdf-macos-aarch64-BUILD-NOTICE.txt",
+      "destination": "src-tauri/binaries/macos-aarch64/qpdf"
+    }
+  ]
 }
