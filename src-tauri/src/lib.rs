@@ -5,6 +5,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+mod qpdf;
+
 const DEFAULT_OUTPUT_STRATEGY: &str = "converted-folder-next-to-source";
 const COLLISION_STRATEGY_EXPLANATION: &str =
     "Creates a converted folder next to the source file and appends (1), (2), ... when a filename already exists.";
@@ -252,7 +254,11 @@ pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             engine_self_check,
-            plan_output_path
+            plan_output_path,
+            qpdf::qpdf_merge_pdfs,
+            qpdf::qpdf_split_pdf,
+            qpdf::qpdf_extract_pages,
+            qpdf::qpdf_rotate_pages
         ])
         .run(tauri::generate_context!())
         .expect("failed to run LocalConvert Desktop");
