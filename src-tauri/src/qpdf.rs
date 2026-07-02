@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashSet,
     fs,
     io::Read,
     path::{Path, PathBuf},
@@ -12,10 +13,11 @@ use std::{
 use std::os::unix::fs::PermissionsExt;
 
 const QPDF_EXECUTION_DISABLED_ERROR: &str =
-    "qpdf engine smoke checks are enabled, but PDF output-writing operations are not enabled yet.";
+    "This qpdf operation is not enabled yet. Only PDF merge and split are enabled.";
 
 const QPDF_ENGINE_MISSING_MESSAGE: &str = "Not bundled yet.";
 const QPDF_MERGE_TIMEOUT_SECONDS: u64 = 120;
+const QPDF_SPLIT_TIMEOUT_SECONDS: u64 = 120;
 
 pub struct QpdfEngineDetection {
     pub status: &'static str,
@@ -74,6 +76,22 @@ pub struct QpdfMergeResult {
     message: String,
 }
 
+#[derive(Serialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct QpdfSplitResult {
+    success: bool,
+    operation: &'static str,
+    source_path: String,
+    output_directory: String,
+    output_paths: Vec<String>,
+    output_bytes: u64,
+    stdout: String,
+    stderr: String,
+    exit_code: Option<i32>,
+    timed_out: bool,
+    message: String,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct QpdfExecutionResult {
     stdout: String,
@@ -105,9 +123,22 @@ pub fn qpdf_merge_pdfs(request: QpdfMergeRequest) -> QpdfMergeResult {
 }
 
 #[tauri::command]
-pub fn qpdf_split_pdf(request: QpdfSplitRequest) -> Result<(), String> {
-    build_qpdf_split_arguments(&request)?;
-    Err(qpdf_execution_disabled_error())
+pub fn qpdf_split_pdf(request: QpdfSplitRequest) -> QpdfSplitResult {
+    let source_path = request.source.trim().to_string();
+    let output_directory = request.output_directory.trim().to_string();
+    execute_qpdf_split(&request).unwrap_or_else(|message| QpdfSplitResult {
+        success: false,
+        operation: "split",
+        source_path,
+        output_directory,
+        output_paths: Vec::new(),
+        output_bytes: 0,
+        stdout: String::new(),
+        stderr: String::new(),
+        exit_code: None,
+        timed_out: false,
+        message,
+    })
 }
 
 #[tauri::command]
@@ -229,6 +260,144 @@ fn execute_qpdf_merge(request: &QpdfMergeRequest) -> Result<QpdfMergeResult, Str
         exit_code: execution.exit_code,
         timed_out: false,
         message: "PDF merge completed locally with bundled qpdf.".to_string(),
+    })
+}
+
+fn execute_qpdf_split(request: &QpdfSplitRequest) -> Result<QpdfSplitResult, String> {
+    build_qpdf_split_arguments(request)?;
+    let source = validate_pdf_path(&request.source, "Source PDF")?;
+    let source_path = PathBuf::from(&source);
+    let output_directory = PathBuf::from(validate_path_like(
+        &request.output_directory,
+        "Output directory",
+    )?);
+    let filename_prefix = normalize_split_filename_prefix(request.filename_prefix.as_deref())?;
+
+    validate_source_pdf_file(&source_path)?;
+    validate_split_output_location(&source_path, &output_directory)?;
+
+    let split_prefix = collision_safe_split_prefix(&output_directory, &filename_prefix)?;
+    let output_pattern = split_output_pattern(&output_directory, &split_prefix);
+    let plan = build_qpdf_split_arguments_for_pattern(&source, &output_pattern)?;
+
+    let platform = current_platform_key();
+    let qpdf_path = resolve_qpdf_sidecar_path(platform)?;
+
+    fs::create_dir_all(&output_directory).map_err(|error| {
+        format!(
+            "Unable to create converted output folder {}: {error}",
+            path_to_string(&output_directory)
+        )
+    })?;
+
+    let existing_outputs = list_directory_filenames(&output_directory)?;
+    let execution = run_qpdf_command(
+        &qpdf_path,
+        &plan.arguments,
+        Duration::from_secs(QPDF_SPLIT_TIMEOUT_SECONDS),
+    )?;
+
+    if execution.timed_out {
+        remove_split_outputs(&output_directory, &split_prefix, &existing_outputs);
+        return Ok(QpdfSplitResult {
+            success: false,
+            operation: "split",
+            source_path: path_to_string(&source_path),
+            output_directory: path_to_string(&output_directory),
+            output_paths: Vec::new(),
+            output_bytes: 0,
+            stdout: execution.stdout,
+            stderr: execution.stderr,
+            exit_code: execution.exit_code,
+            timed_out: true,
+            message: format!("qpdf split timed out after {QPDF_SPLIT_TIMEOUT_SECONDS} seconds."),
+        });
+    }
+
+    if execution.exit_code != Some(0) {
+        remove_split_outputs(&output_directory, &split_prefix, &existing_outputs);
+        return Ok(QpdfSplitResult {
+            success: false,
+            operation: "split",
+            source_path: path_to_string(&source_path),
+            output_directory: path_to_string(&output_directory),
+            output_paths: Vec::new(),
+            output_bytes: 0,
+            stdout: execution.stdout,
+            stderr: execution.stderr,
+            exit_code: execution.exit_code,
+            timed_out: false,
+            message: "qpdf split failed.".to_string(),
+        });
+    }
+
+    let split_outputs =
+        collect_new_split_outputs(&output_directory, &split_prefix, &existing_outputs);
+
+    if split_outputs.is_empty() {
+        remove_split_outputs(&output_directory, &split_prefix, &existing_outputs);
+        return Ok(QpdfSplitResult {
+            success: false,
+            operation: "split",
+            source_path: path_to_string(&source_path),
+            output_directory: path_to_string(&output_directory),
+            output_paths: Vec::new(),
+            output_bytes: 0,
+            stdout: execution.stdout,
+            stderr: execution.stderr,
+            exit_code: execution.exit_code,
+            timed_out: false,
+            message: "qpdf reported success, but no split output PDFs were found.".to_string(),
+        });
+    }
+
+    let mut output_bytes = 0;
+    for output in &split_outputs {
+        let metadata = fs::metadata(output).map_err(|error| {
+            format!(
+                "qpdf reported success, but split output could not be inspected: {}: {error}",
+                path_to_string(output)
+            )
+        })?;
+
+        if metadata.len() == 0 {
+            remove_split_outputs(&output_directory, &split_prefix, &existing_outputs);
+            return Ok(QpdfSplitResult {
+                success: false,
+                operation: "split",
+                source_path: path_to_string(&source_path),
+                output_directory: path_to_string(&output_directory),
+                output_paths: Vec::new(),
+                output_bytes: 0,
+                stdout: execution.stdout,
+                stderr: execution.stderr,
+                exit_code: execution.exit_code,
+                timed_out: false,
+                message: format!(
+                    "qpdf reported success, but split output is empty: {}",
+                    path_to_string(output)
+                ),
+            });
+        }
+
+        output_bytes += metadata.len();
+    }
+
+    Ok(QpdfSplitResult {
+        success: true,
+        operation: "split",
+        source_path: path_to_string(&source_path),
+        output_directory: path_to_string(&output_directory),
+        output_paths: split_outputs
+            .iter()
+            .map(|output| path_to_string(output))
+            .collect(),
+        output_bytes,
+        stdout: execution.stdout,
+        stderr: execution.stderr,
+        exit_code: execution.exit_code,
+        timed_out: false,
+        message: "PDF split completed locally with bundled qpdf.".to_string(),
     })
 }
 
@@ -463,20 +632,23 @@ fn build_qpdf_merge_arguments(request: &QpdfMergeRequest) -> Result<QpdfCommandP
 }
 
 fn build_qpdf_split_arguments(request: &QpdfSplitRequest) -> Result<QpdfCommandPlan, String> {
-    let source = validate_path_like(&request.source, "Source PDF")?;
+    let source = validate_pdf_path(&request.source, "Source PDF")?;
     let output_directory = validate_path_like(&request.output_directory, "Output directory")?;
-    let filename_prefix = request
-        .filename_prefix
-        .as_deref()
-        .map(str::trim)
-        .filter(|prefix| !prefix.is_empty())
-        .unwrap_or("page");
-    let output_pattern = Path::new(&output_directory).join(format!("{filename_prefix}-%d.pdf"));
+    let filename_prefix = normalize_split_filename_prefix(request.filename_prefix.as_deref())?;
+    let output_pattern = split_output_pattern(Path::new(&output_directory), &filename_prefix);
 
+    build_qpdf_split_arguments_for_pattern(&source, &output_pattern)
+}
+
+fn build_qpdf_split_arguments_for_pattern(
+    source: &str,
+    output_pattern: &Path,
+) -> Result<QpdfCommandPlan, String> {
+    let source = validate_pdf_path(source, "Source PDF")?;
     Ok(qpdf_plan(vec![
         "--split-pages".to_string(),
         source,
-        path_to_string(&output_pattern),
+        path_to_string(output_pattern),
     ]))
 }
 
@@ -550,19 +722,32 @@ fn has_pdf_extension(path: &Path) -> bool {
 fn validate_merge_source_files(sources: &[String]) -> Result<(), String> {
     for source in sources {
         let source_path = PathBuf::from(validate_pdf_path(source, "Source PDF")?);
-        let metadata = fs::metadata(&source_path).map_err(|error| {
-            format!(
-                "Source PDF does not exist or cannot be inspected: {}: {error}",
-                path_to_string(&source_path)
-            )
-        })?;
+        validate_source_pdf_file(&source_path)?;
+    }
 
-        if !metadata.is_file() {
-            return Err(format!(
-                "Source PDF is not a file: {}",
-                path_to_string(&source_path)
-            ));
-        }
+    Ok(())
+}
+
+fn validate_source_pdf_file(source_path: &Path) -> Result<(), String> {
+    if !has_pdf_extension(source_path) {
+        return Err(format!(
+            "Source PDF must use a .pdf extension: {}",
+            path_to_string(source_path)
+        ));
+    }
+
+    let metadata = fs::metadata(source_path).map_err(|error| {
+        format!(
+            "Source PDF does not exist or cannot be inspected: {}: {error}",
+            path_to_string(source_path)
+        )
+    })?;
+
+    if !metadata.is_file() {
+        return Err(format!(
+            "Source PDF is not a file: {}",
+            path_to_string(source_path)
+        ));
     }
 
     Ok(())
@@ -603,6 +788,172 @@ fn validate_merge_output_path(output_path: &Path) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn validate_split_output_directory(output_directory: &Path) -> Result<(), String> {
+    if output_directory.file_name().and_then(|name| name.to_str()) != Some("converted") {
+        return Err(format!(
+            "Split output directory must be a converted folder: {}",
+            path_to_string(output_directory)
+        ));
+    }
+
+    if output_directory.exists() && !output_directory.is_dir() {
+        return Err(format!(
+            "Converted output path exists but is not a folder: {}",
+            path_to_string(output_directory)
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_split_output_location(
+    source_path: &Path,
+    output_directory: &Path,
+) -> Result<(), String> {
+    validate_split_output_directory(output_directory)?;
+
+    let source_parent = source_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| "Source PDF must have a parent folder.".to_string())?;
+    let output_parent = output_directory
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| "Split output directory must have a parent folder.".to_string())?;
+
+    if output_parent != source_parent {
+        return Err(format!(
+            "Split output directory must be the converted folder next to the source PDF: {}",
+            path_to_string(output_directory)
+        ));
+    }
+
+    Ok(())
+}
+
+fn normalize_split_filename_prefix(prefix: Option<&str>) -> Result<String, String> {
+    let prefix = prefix
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("page");
+
+    if prefix
+        .chars()
+        .any(|character| matches!(character, '/' | '\\' | '\0') || character.is_control())
+    {
+        return Err("Split filename prefix contains an invalid path character.".to_string());
+    }
+
+    Ok(prefix.to_string())
+}
+
+fn split_output_pattern(output_directory: &Path, filename_prefix: &str) -> PathBuf {
+    output_directory.join(format!("{filename_prefix}-%d.pdf"))
+}
+
+fn collision_safe_split_prefix(
+    output_directory: &Path,
+    desired_prefix: &str,
+) -> Result<String, String> {
+    if !split_prefix_has_collision(output_directory, desired_prefix)? {
+        return Ok(desired_prefix.to_string());
+    }
+
+    let mut index = 1;
+    loop {
+        let candidate = format!("{desired_prefix} ({index})");
+        if !split_prefix_has_collision(output_directory, &candidate)? {
+            return Ok(candidate);
+        }
+        index += 1;
+    }
+}
+
+fn split_prefix_has_collision(output_directory: &Path, prefix: &str) -> Result<bool, String> {
+    if !output_directory.exists() {
+        return Ok(false);
+    }
+
+    for entry in fs::read_dir(output_directory).map_err(|error| {
+        format!(
+            "Unable to inspect converted output folder {}: {error}",
+            path_to_string(output_directory)
+        )
+    })? {
+        let entry = entry.map_err(|error| {
+            format!(
+                "Unable to inspect converted output folder {}: {error}",
+                path_to_string(output_directory)
+            )
+        })?;
+        let file_name = entry.file_name().to_string_lossy().into_owned();
+        if is_split_output_name_for_prefix(&file_name, prefix) {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+fn list_directory_filenames(directory: &Path) -> Result<HashSet<String>, String> {
+    let mut filenames = HashSet::new();
+    for entry in fs::read_dir(directory).map_err(|error| {
+        format!(
+            "Unable to inspect converted output folder {}: {error}",
+            path_to_string(directory)
+        )
+    })? {
+        let entry = entry.map_err(|error| {
+            format!(
+                "Unable to inspect converted output folder {}: {error}",
+                path_to_string(directory)
+            )
+        })?;
+        filenames.insert(entry.file_name().to_string_lossy().into_owned());
+    }
+
+    Ok(filenames)
+}
+
+fn collect_new_split_outputs(
+    output_directory: &Path,
+    prefix: &str,
+    existing_outputs: &HashSet<String>,
+) -> Vec<PathBuf> {
+    let mut outputs = Vec::new();
+    let Ok(entries) = fs::read_dir(output_directory) else {
+        return outputs;
+    };
+
+    for entry in entries.flatten() {
+        let file_name = entry.file_name().to_string_lossy().into_owned();
+        if existing_outputs.contains(&file_name) {
+            continue;
+        }
+
+        let path = entry.path();
+        if is_split_output_name_for_prefix(&file_name, prefix)
+            && path.is_file()
+            && has_pdf_extension(&path)
+        {
+            outputs.push(path);
+        }
+    }
+
+    outputs.sort();
+    outputs
+}
+
+fn remove_split_outputs(output_directory: &Path, prefix: &str, existing_outputs: &HashSet<String>) {
+    for output in collect_new_split_outputs(output_directory, prefix, existing_outputs) {
+        let _ = fs::remove_file(output);
+    }
+}
+
+fn is_split_output_name_for_prefix(file_name: &str, prefix: &str) -> bool {
+    file_name.starts_with(&format!("{prefix}-")) && file_name.to_lowercase().ends_with(".pdf")
 }
 
 fn run_qpdf_command(
@@ -931,6 +1282,110 @@ mod tests {
     }
 
     #[test]
+    fn plans_split_arguments_with_chinese_paths_and_spaces() {
+        let plan = build_qpdf_split_arguments(&QpdfSplitRequest {
+            source: "/Users/mac/Desktop/客户 文件/报告 原件.pdf".to_string(),
+            output_directory: "/Users/mac/Desktop/客户 文件/converted".to_string(),
+            filename_prefix: Some("报告 页面".to_string()),
+        })
+        .expect("split arguments should be planned");
+
+        assert_eq!(
+            plan.arguments,
+            vec![
+                "--split-pages",
+                "/Users/mac/Desktop/客户 文件/报告 原件.pdf",
+                "/Users/mac/Desktop/客户 文件/converted/报告 页面-%d.pdf",
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_split_requests() {
+        let empty_source = build_qpdf_split_arguments(&QpdfSplitRequest {
+            source: " ".to_string(),
+            output_directory: "/Users/mac/Desktop/converted".to_string(),
+            filename_prefix: Some("page".to_string()),
+        });
+        assert_eq!(
+            empty_source,
+            Err("Source PDF path is required.".to_string())
+        );
+
+        let non_pdf_source = build_qpdf_split_arguments(&QpdfSplitRequest {
+            source: "/Users/mac/Desktop/report.txt".to_string(),
+            output_directory: "/Users/mac/Desktop/converted".to_string(),
+            filename_prefix: Some("page".to_string()),
+        });
+        assert_eq!(
+            non_pdf_source,
+            Err("Source PDF must use a .pdf extension: /Users/mac/Desktop/report.txt".to_string())
+        );
+
+        let invalid_prefix = build_qpdf_split_arguments(&QpdfSplitRequest {
+            source: "/Users/mac/Desktop/report.pdf".to_string(),
+            output_directory: "/Users/mac/Desktop/converted".to_string(),
+            filename_prefix: Some("bad/prefix".to_string()),
+        });
+        assert_eq!(
+            invalid_prefix,
+            Err("Split filename prefix contains an invalid path character.".to_string())
+        );
+    }
+
+    #[test]
+    fn rejects_missing_split_source_file() {
+        let case_dir = temp_fixture_path("missing-split-source");
+        let result = qpdf_split_pdf(QpdfSplitRequest {
+            source: path_to_string(&case_dir.join("missing.pdf")),
+            output_directory: path_to_string(&case_dir.join("converted")),
+            filename_prefix: Some("missing-page".to_string()),
+        });
+
+        assert!(!result.success);
+        assert!(result.message.contains("Source PDF does not exist"));
+    }
+
+    #[test]
+    fn plans_collision_safe_split_prefixes_without_overwrite() {
+        let case_dir = temp_fixture_path("split-collision");
+        let converted_dir = case_dir.join("converted");
+        fs::create_dir_all(&converted_dir).expect("converted test directory should be created");
+        fs::write(converted_dir.join("报告 页面-1.pdf"), b"existing")
+            .expect("existing split output should be written");
+
+        let prefix = collision_safe_split_prefix(&converted_dir, "报告 页面")
+            .expect("collision-safe split prefix should be planned");
+        let pattern = split_output_pattern(&converted_dir, &prefix);
+
+        assert_eq!(prefix, "报告 页面 (1)");
+        assert_eq!(pattern, converted_dir.join("报告 页面 (1)-%d.pdf"));
+
+        let _ = fs::remove_dir_all(case_dir);
+    }
+
+    #[test]
+    fn validates_new_split_outputs_only() {
+        let case_dir = temp_fixture_path("split-output-validation");
+        let converted_dir = case_dir.join("converted");
+        fs::create_dir_all(&converted_dir).expect("converted test directory should be created");
+        fs::write(converted_dir.join("report-page-1.pdf"), b"existing")
+            .expect("existing split output should be written");
+        fs::write(converted_dir.join("report-page (1)-1.pdf"), b"new")
+            .expect("new split output should be written");
+        fs::write(converted_dir.join("report-page (1)-note.txt"), b"not pdf")
+            .expect("non-pdf fixture should be written");
+
+        let existing_outputs = HashSet::from(["report-page-1.pdf".to_string()]);
+        let outputs =
+            collect_new_split_outputs(&converted_dir, "report-page (1)", &existing_outputs);
+
+        assert_eq!(outputs, vec![converted_dir.join("report-page (1)-1.pdf")]);
+
+        let _ = fs::remove_dir_all(case_dir);
+    }
+
+    #[test]
     fn plans_extract_arguments_with_chinese_and_spaces() {
         let plan = build_qpdf_extract_arguments(&QpdfExtractPagesRequest {
             source: "/Users/mac/Desktop/客户 文件/合同 原件.pdf".to_string(),
@@ -984,19 +1439,44 @@ mod tests {
     }
 
     fn write_tiny_pdf(path: &Path, label: &str) {
-        let stream = format!("BT /F1 24 Tf 72 720 Td ({label}) Tj ET\n");
-        let objects = vec![
+        write_tiny_pdf_pages(path, &[label]);
+    }
+
+    fn write_tiny_pdf_pages(path: &Path, labels: &[&str]) {
+        let labels = if labels.is_empty() {
+            vec!["Page"]
+        } else {
+            labels.to_vec()
+        };
+        let page_count = labels.len();
+        let font_object_id = 3;
+        let page_object_ids = (0..page_count)
+            .map(|index| 4 + (index * 2))
+            .collect::<Vec<_>>();
+        let kids = page_object_ids
+            .iter()
+            .map(|object_id| format!("{object_id} 0 R"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut objects = vec![
             "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n".to_string(),
-            "2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n".to_string(),
-            "3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj\n".to_string(),
-            "4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n"
-                .to_string(),
-            format!(
-                "5 0 obj << /Length {} >> stream\n{}endstream endobj\n",
+            format!("2 0 obj << /Type /Pages /Kids [{kids}] /Count {page_count} >> endobj\n"),
+            "3 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n".to_string(),
+        ];
+
+        for (index, label) in labels.iter().enumerate() {
+            let page_object_id = 4 + (index * 2);
+            let content_object_id = page_object_id + 1;
+            let stream = format!("BT /F1 24 Tf 72 720 Td ({label}) Tj ET\n");
+            objects.push(format!(
+                "{page_object_id} 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 {font_object_id} 0 R >> >> /Contents {content_object_id} 0 R >> endobj\n"
+            ));
+            objects.push(format!(
+                "{content_object_id} 0 obj << /Length {} >> stream\n{}endstream endobj\n",
                 stream.len(),
                 stream
-            ),
-        ];
+            ));
+        }
 
         let mut data = Vec::from("%PDF-1.4\n".as_bytes());
         let mut offsets = vec![0usize];
@@ -1161,6 +1641,72 @@ mod tests {
             fs::read(&second).expect("second source should remain readable"),
             second_before
         );
+
+        let _ = fs::remove_dir_all(case_dir);
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[test]
+    fn qpdf_split_execution_writes_outputs_only_in_converted() {
+        let case_dir = temp_fixture_path("execute-split");
+        fs::create_dir_all(&case_dir).expect("split smoke directory should be created");
+        let source = case_dir.join("客户 文件.pdf");
+        let converted_dir = case_dir.join("converted");
+        write_tiny_pdf_pages(&source, &["第一页", "Second page"]);
+        let source_before = fs::read(&source).expect("source should be readable");
+
+        let result = qpdf_split_pdf(QpdfSplitRequest {
+            source: path_to_string(&source),
+            output_directory: path_to_string(&converted_dir),
+            filename_prefix: Some("客户 文件-page".to_string()),
+        });
+
+        assert!(result.success, "{}", result.message);
+        assert_eq!(result.source_path, path_to_string(&source));
+        assert_eq!(result.output_directory, path_to_string(&converted_dir));
+        assert_eq!(result.output_paths.len(), 2);
+        assert!(result.output_bytes > 0);
+        for output_path in &result.output_paths {
+            let output = PathBuf::from(output_path);
+            assert!(output.starts_with(&converted_dir));
+            assert!(output.exists());
+            assert!(fs::metadata(&output).expect("output metadata").len() > 0);
+        }
+        assert_eq!(
+            fs::read(&source).expect("source should remain readable"),
+            source_before
+        );
+
+        let _ = fs::remove_dir_all(case_dir);
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[test]
+    fn qpdf_split_execution_avoids_overwriting_existing_outputs() {
+        let case_dir = temp_fixture_path("execute-split-collision");
+        let converted_dir = case_dir.join("converted");
+        fs::create_dir_all(&converted_dir).expect("converted directory should be created");
+        let source = case_dir.join("report.pdf");
+        let existing_output = converted_dir.join("report-page-1.pdf");
+        write_tiny_pdf_pages(&source, &["One", "Two"]);
+        fs::write(&existing_output, b"keep me")
+            .expect("existing split output fixture should be written");
+
+        let result = qpdf_split_pdf(QpdfSplitRequest {
+            source: path_to_string(&source),
+            output_directory: path_to_string(&converted_dir),
+            filename_prefix: Some("report-page".to_string()),
+        });
+
+        assert!(result.success, "{}", result.message);
+        assert_eq!(
+            fs::read(&existing_output).expect("existing output should remain readable"),
+            b"keep me"
+        );
+        assert!(result
+            .output_paths
+            .iter()
+            .all(|output| output.contains("report-page (1)-")));
 
         let _ = fs::remove_dir_all(case_dir);
     }

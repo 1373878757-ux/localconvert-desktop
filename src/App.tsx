@@ -12,6 +12,7 @@ import {
   TaskStatus,
   createTaskFromFile,
   formatBytes,
+  getBaseName,
   getOutputName
 } from "./taskUtils";
 
@@ -42,6 +43,20 @@ type QpdfMergeResult = {
   success: boolean;
   operation: "merge";
   outputPath: string;
+  outputBytes: number;
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+  timedOut: boolean;
+  message: string;
+};
+
+type QpdfSplitResult = {
+  success: boolean;
+  operation: "split";
+  sourcePath: string;
+  outputDirectory: string;
+  outputPaths: string[];
   outputBytes: number;
   stdout: string;
   stderr: string;
@@ -146,7 +161,7 @@ function App() {
   const selectedTaskWithError = tasks.find((task) => task.errorLog);
   const qpdfEngine = selfCheck.engines.find((engine) => engine.name === "qpdf");
   const qpdfAvailable = qpdfEngine?.status === "available";
-  const pdfMergeCandidates = tasks.filter(
+  const realLocalPdfTasks = tasks.filter(
     (task) =>
       task.extension === "pdf" &&
       Boolean(task.sourcePath) &&
@@ -154,8 +169,8 @@ function App() {
   );
   const canMergePdfs =
     qpdfAvailable &&
-    pdfMergeCandidates.length >= 2 &&
-    pdfMergeCandidates.every((task) => task.status !== "converting");
+    realLocalPdfTasks.length >= 2 &&
+    realLocalPdfTasks.every((task) => task.status !== "converting");
 
   async function planBackendOutput(task: LocalTask) {
     if (!task.sourcePath) {
@@ -202,6 +217,17 @@ function App() {
     return `${sourcePath.slice(0, lastSeparatorIndex + 1)}${fileName}`;
   }
 
+  function buildSiblingDirectory(sourcePath: string, directoryName: string): string {
+    const separator =
+      sourcePath.includes("\\") && !sourcePath.includes("/") ? "\\" : "/";
+    const lastSeparatorIndex = sourcePath.lastIndexOf(separator);
+    if (lastSeparatorIndex < 0) {
+      return directoryName;
+    }
+
+    return `${sourcePath.slice(0, lastSeparatorIndex + 1)}${directoryName}`;
+  }
+
   function formatMergeLog(result: QpdfMergeResult) {
     return [
       result.message,
@@ -212,6 +238,33 @@ function App() {
       result.stdout ? `stdout:\n${result.stdout}` : "stdout: <empty>",
       result.stderr ? `stderr:\n${result.stderr}` : "stderr: <empty>"
     ].join("\n");
+  }
+
+  function formatSplitLog(result: QpdfSplitResult) {
+    return [
+      result.message,
+      `Source: ${result.sourcePath || "not available"}`,
+      `Output folder: ${result.outputDirectory || "not created"}`,
+      `Outputs: ${result.outputPaths.length}`,
+      result.outputPaths.length > 0
+        ? `Output paths:\n${result.outputPaths.join("\n")}`
+        : "Output paths: <none>",
+      `Output bytes: ${result.outputBytes}`,
+      `Exit code: ${result.exitCode ?? "none"}`,
+      `Timed out: ${result.timedOut ? "yes" : "no"}`,
+      result.stdout ? `stdout:\n${result.stdout}` : "stdout: <empty>",
+      result.stderr ? `stderr:\n${result.stderr}` : "stderr: <empty>"
+    ].join("\n");
+  }
+
+  function canSplitPdfTask(task: LocalTask) {
+    return (
+      qpdfAvailable &&
+      task.extension === "pdf" &&
+      Boolean(task.sourcePath) &&
+      task.status !== "converting" &&
+      task.status !== "cancelled"
+    );
   }
 
   function addFiles(fileList: FileList | File[]) {
@@ -314,7 +367,7 @@ function App() {
   }
 
   async function mergePdfTasks() {
-    const mergeTasks = pdfMergeCandidates;
+    const mergeTasks = realLocalPdfTasks;
     if (!qpdfAvailable || mergeTasks.length < 2) {
       setFolderMessage(
         "PDF merge requires bundled qpdf and at least two local PDF files with real paths."
@@ -392,6 +445,74 @@ function App() {
     }
   }
 
+  async function splitPdfTask(task: LocalTask) {
+    if (!canSplitPdfTask(task) || !task.sourcePath) {
+      setFolderMessage(
+        "PDF split requires bundled qpdf and one local PDF file with a real path."
+      );
+      return;
+    }
+
+    setTasks((currentTasks) =>
+      currentTasks.map((currentTask) =>
+        currentTask.id === task.id
+          ? {
+              ...currentTask,
+              status: "converting",
+              errorLog: ""
+            }
+          : currentTask
+      )
+    );
+
+    try {
+      const result = await invoke<QpdfSplitResult>("qpdf_split_pdf", {
+        request: {
+          source: task.sourcePath,
+          outputDirectory: buildSiblingDirectory(task.sourcePath, "converted"),
+          filenamePrefix: `${getBaseName(task.displayName)}-page`
+        }
+      });
+      const log = formatSplitLog(result);
+      const outputPreview = result.success
+        ? `${result.outputPaths.length} files in ${result.outputDirectory}`
+        : task.outputPreview;
+
+      setTasks((currentTasks) =>
+        currentTasks.map((currentTask) =>
+          currentTask.id === task.id
+            ? {
+                ...currentTask,
+                status: result.success ? "completed" : "failed",
+                outputPreview,
+                errorLog: result.success ? "" : log
+              }
+            : currentTask
+        )
+      );
+      setFolderMessage(
+        result.success
+          ? `PDF split completed locally: ${result.outputPaths.length} files in ${result.outputDirectory}`
+          : "PDF split failed locally. See the error log."
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "PDF split failed locally.";
+      setTasks((currentTasks) =>
+        currentTasks.map((currentTask) =>
+          currentTask.id === task.id
+            ? {
+                ...currentTask,
+                status: "failed",
+                errorLog: message
+              }
+            : currentTask
+        )
+      );
+      setFolderMessage("PDF split failed locally. See the error log.");
+    }
+  }
+
   return (
     <main className="app-shell">
       <header className="top-bar">
@@ -402,7 +523,9 @@ function App() {
         <div className="privacy-status" aria-label="Local privacy status">
           <span>No upload</span>
           <span>Local queue</span>
-          <span>{qpdfAvailable ? "PDF merge enabled" : "Conversion disabled"}</span>
+          <span>
+            {qpdfAvailable ? "PDF merge/split enabled" : "Conversion disabled"}
+          </span>
         </div>
       </header>
 
@@ -505,7 +628,7 @@ function App() {
               <div>
                 <h2>Task queue</h2>
                 <span>
-                  {tasks.length} total · {pdfMergeCandidates.length} merge-ready PDFs
+                  {tasks.length} total · {realLocalPdfTasks.length} local PDFs
                 </span>
               </div>
               <button
@@ -583,6 +706,21 @@ function App() {
                       >
                         Fail
                       </button>
+                      {task.extension === "pdf" && task.sourcePath ? (
+                        <button
+                          type="button"
+                          className="small-button"
+                          onClick={() => void splitPdfTask(task)}
+                          disabled={!canSplitPdfTask(task)}
+                          title={
+                            qpdfAvailable
+                              ? "Split this one local PDF with bundled qpdf."
+                              : "Bundled qpdf must be available before PDF split can run."
+                          }
+                        >
+                          Split PDF
+                        </button>
+                      ) : null}
                       <button
                         type="button"
                         className="small-button"
@@ -628,7 +766,7 @@ function App() {
             <h2>Engine status</h2>
             <p>
               {qpdfAvailable
-                ? "PDF merge is enabled locally with bundled qpdf. Other conversions remain disabled."
+                ? "PDF merge and split are enabled locally with bundled qpdf. Other conversions remain disabled."
                 : "Conversion engines are not bundled yet."}
             </p>
             <dl className="engine-list">
@@ -645,7 +783,7 @@ function App() {
             <h2>Error log</h2>
             <pre className="log-box">
               {selectedTaskWithError?.errorLog ||
-                "No error log. Failed PDF merge or demo tasks appear here."}
+                "No error log. Failed PDF merge, PDF split, or demo tasks appear here."}
             </pre>
           </section>
 
@@ -653,7 +791,7 @@ function App() {
             <h2>Local privacy</h2>
             <ul>
               <li>No upload.</li>
-              <li>PDF merge runs with bundled local qpdf only.</li>
+              <li>PDF merge and split run with bundled local qpdf only.</li>
               <li>Other conversion operations remain disabled.</li>
             </ul>
           </section>
