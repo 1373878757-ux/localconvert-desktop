@@ -9,6 +9,7 @@ function SplashScreen() {
         <div className="splash-brand">
           <h1>LocalConvert Desktop</h1>
           <p>by 田宸宇</p>
+          <p className="splash-slogan">让可能，发生在这儿。</p>
         </div>
 
         <div className="splash-status" aria-label="Startup status">

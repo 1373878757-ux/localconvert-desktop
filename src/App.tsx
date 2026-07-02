@@ -1168,6 +1168,7 @@ function App() {
             <p>
               <strong>Created by 田宸宇</strong>
             </p>
+            <p className="about-slogan">让可能，发生在这儿。</p>
             <p>Local-only file conversion tool.</p>
           </section>
 

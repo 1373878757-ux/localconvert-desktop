@@ -603,6 +603,11 @@ h3 {
   margin-bottom: 10px;
 }
 
+.inspector-card .about-slogan {
+  color: #6d7783;
+  font-size: 0.8rem;
+}
+
 .inspector-card ul {
   margin: 0;
   padding-left: 18px;

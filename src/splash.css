@@ -55,6 +55,13 @@ body {
   font-size: 0.86rem;
 }
 
+.splash-brand .splash-slogan {
+  margin-top: 6px;
+  color: #6d7783;
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
 .splash-status {
   display: grid;
   gap: 8px;
