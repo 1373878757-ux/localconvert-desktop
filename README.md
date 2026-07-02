@@ -1,5 +1,7 @@
 # LocalConvert Desktop
 
+by 田宸宇
+
 ## Project Overview
 
 LocalConvert Desktop is a desktop-first file conversion app for people who want reliable local conversion without sending files to a cloud service.

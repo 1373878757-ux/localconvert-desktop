@@ -107,9 +107,18 @@ button:disabled {
 }
 
 .app-title p {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   margin: 0;
   color: #5b6672;
   font-size: 0.82rem;
+}
+
+.app-title p span + span::before {
+  content: "/";
+  margin-right: 8px;
+  color: #9aa4af;
 }
 
 .privacy-status {

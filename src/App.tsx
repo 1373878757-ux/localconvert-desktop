@@ -823,7 +823,10 @@ function App() {
       <header className="top-bar">
         <div className="app-title">
           <h1>LocalConvert Desktop</h1>
-          <p>Files stay on this computer.</p>
+          <p>
+            <span>by 田宸宇</span>
+            <span>Files stay on this computer.</span>
+          </p>
         </div>
         <div className="privacy-status" aria-label="Local privacy status">
           <span>No upload</span>
