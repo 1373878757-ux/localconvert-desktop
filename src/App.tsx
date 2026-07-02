@@ -38,6 +38,18 @@ type OutputPathPlan = {
   collisionStrategyExplanation: string;
 };
 
+type QpdfMergeResult = {
+  success: boolean;
+  operation: "merge";
+  outputPath: string;
+  outputBytes: number;
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+  timedOut: boolean;
+  message: string;
+};
+
 const fallbackSelfCheck: EngineSelfCheck = {
   platform: "desktop scaffold",
   fullEdition: true,
@@ -132,6 +144,18 @@ function App() {
   );
 
   const selectedTaskWithError = tasks.find((task) => task.errorLog);
+  const qpdfEngine = selfCheck.engines.find((engine) => engine.name === "qpdf");
+  const qpdfAvailable = qpdfEngine?.status === "available";
+  const pdfMergeCandidates = tasks.filter(
+    (task) =>
+      task.extension === "pdf" &&
+      Boolean(task.sourcePath) &&
+      task.status !== "cancelled"
+  );
+  const canMergePdfs =
+    qpdfAvailable &&
+    pdfMergeCandidates.length >= 2 &&
+    pdfMergeCandidates.every((task) => task.status !== "converting");
 
   async function planBackendOutput(task: LocalTask) {
     if (!task.sourcePath) {
@@ -165,6 +189,29 @@ function App() {
   function outputNameFromPreview(outputPreview: string): string {
     const normalizedPreview = outputPreview.replaceAll("\\", "/");
     return normalizedPreview.split("/").pop() || outputPreview;
+  }
+
+  function buildSiblingPath(sourcePath: string, fileName: string): string {
+    const separator =
+      sourcePath.includes("\\") && !sourcePath.includes("/") ? "\\" : "/";
+    const lastSeparatorIndex = sourcePath.lastIndexOf(separator);
+    if (lastSeparatorIndex < 0) {
+      return fileName;
+    }
+
+    return `${sourcePath.slice(0, lastSeparatorIndex + 1)}${fileName}`;
+  }
+
+  function formatMergeLog(result: QpdfMergeResult) {
+    return [
+      result.message,
+      `Output: ${result.outputPath || "not written"}`,
+      `Output bytes: ${result.outputBytes}`,
+      `Exit code: ${result.exitCode ?? "none"}`,
+      `Timed out: ${result.timedOut ? "yes" : "no"}`,
+      result.stdout ? `stdout:\n${result.stdout}` : "stdout: <empty>",
+      result.stderr ? `stderr:\n${result.stderr}` : "stderr: <empty>"
+    ].join("\n");
   }
 
   function addFiles(fileList: FileList | File[]) {
@@ -266,6 +313,85 @@ function App() {
     );
   }
 
+  async function mergePdfTasks() {
+    const mergeTasks = pdfMergeCandidates;
+    if (!qpdfAvailable || mergeTasks.length < 2) {
+      setFolderMessage(
+        "PDF merge requires bundled qpdf and at least two local PDF files with real paths."
+      );
+      return;
+    }
+
+    const taskIds = new Set(mergeTasks.map((task) => task.id));
+    setTasks((currentTasks) =>
+      currentTasks.map((task) =>
+        taskIds.has(task.id)
+          ? {
+              ...task,
+              status: "converting",
+              errorLog: ""
+            }
+          : task
+      )
+    );
+
+    try {
+      const firstSourcePath = mergeTasks[0].sourcePath;
+      if (!firstSourcePath) {
+        throw new Error("PDF merge requires real local source paths.");
+      }
+
+      const outputSource = buildSiblingPath(firstSourcePath, "merged.pdf");
+      const outputPlan = await invoke<OutputPathPlan>("plan_output_path", {
+        request: {
+          source: outputSource,
+          targetExtension: "pdf",
+          outputStrategy: "converted-folder-next-to-source"
+        }
+      });
+      const result = await invoke<QpdfMergeResult>("qpdf_merge_pdfs", {
+        request: {
+          sources: mergeTasks.map((task) => task.sourcePath),
+          output: outputPlan.plannedOutputPath
+        }
+      });
+      const log = formatMergeLog(result);
+
+      setTasks((currentTasks) =>
+        currentTasks.map((task) =>
+          taskIds.has(task.id)
+            ? {
+                ...task,
+                status: result.success ? "completed" : "failed",
+                outputPreview: result.outputPath || outputPlan.plannedOutputPath,
+                errorLog: result.success ? "" : log
+              }
+            : task
+        )
+      );
+      setFolderMessage(
+        result.success
+          ? `PDF merge completed locally: ${result.outputPath}`
+          : "PDF merge failed locally. See the error log."
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "PDF merge failed locally.";
+      setTasks((currentTasks) =>
+        currentTasks.map((task) =>
+          taskIds.has(task.id)
+            ? {
+                ...task,
+                status: "failed",
+                errorLog: message
+              }
+            : task
+        )
+      );
+      setFolderMessage("PDF merge failed locally. See the error log.");
+    }
+  }
+
   return (
     <main className="app-shell">
       <header className="top-bar">
@@ -276,7 +402,7 @@ function App() {
         <div className="privacy-status" aria-label="Local privacy status">
           <span>No upload</span>
           <span>Local queue</span>
-          <span>Conversion disabled</span>
+          <span>{qpdfAvailable ? "PDF merge enabled" : "Conversion disabled"}</span>
         </div>
       </header>
 
@@ -376,8 +502,24 @@ function App() {
 
           <section className="queue-panel" aria-label="Task queue">
             <div className="queue-heading">
-              <h2>Task queue</h2>
-              <span>{tasks.length} total</span>
+              <div>
+                <h2>Task queue</h2>
+                <span>
+                  {tasks.length} total · {pdfMergeCandidates.length} merge-ready PDFs
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => void mergePdfTasks()}
+                disabled={!canMergePdfs}
+                title={
+                  qpdfAvailable
+                    ? "Merge all queued local PDF files with bundled qpdf."
+                    : "Bundled qpdf must be available before PDF merge can run."
+                }
+              >
+                Merge PDFs
+              </button>
             </div>
 
             {tasks.length === 0 ? (
@@ -484,7 +626,11 @@ function App() {
 
           <section className="inspector-card">
             <h2>Engine status</h2>
-            <p>Conversion engines are not bundled yet.</p>
+            <p>
+              {qpdfAvailable
+                ? "PDF merge is enabled locally with bundled qpdf. Other conversions remain disabled."
+                : "Conversion engines are not bundled yet."}
+            </p>
             <dl className="engine-list">
               {selfCheck.engines.map((engine) => (
                 <div className="engine-row" key={engine.name}>
@@ -499,7 +645,7 @@ function App() {
             <h2>Error log</h2>
             <pre className="log-box">
               {selectedTaskWithError?.errorLog ||
-                "No error log. Failed demo tasks appear here."}
+                "No error log. Failed PDF merge or demo tasks appear here."}
             </pre>
           </section>
 
@@ -507,8 +653,8 @@ function App() {
             <h2>Local privacy</h2>
             <ul>
               <li>No upload.</li>
-              <li>No file contents read.</li>
-              <li>No conversion process started.</li>
+              <li>PDF merge runs with bundled local qpdf only.</li>
+              <li>Other conversion operations remain disabled.</li>
             </ul>
           </section>
         </aside>

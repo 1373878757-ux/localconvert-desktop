@@ -1,8 +1,11 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     fs,
+    io::Read,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
+    thread,
+    time::{Duration, Instant},
 };
 
 #[cfg(unix)]
@@ -12,6 +15,7 @@ const QPDF_EXECUTION_DISABLED_ERROR: &str =
     "qpdf engine smoke checks are enabled, but PDF output-writing operations are not enabled yet.";
 
 const QPDF_ENGINE_MISSING_MESSAGE: &str = "Not bundled yet.";
+const QPDF_MERGE_TIMEOUT_SECONDS: u64 = 120;
 
 pub struct QpdfEngineDetection {
     pub status: &'static str,
@@ -56,6 +60,28 @@ struct QpdfCommandPlan {
     arguments: Vec<String>,
 }
 
+#[derive(Serialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct QpdfMergeResult {
+    success: bool,
+    operation: &'static str,
+    output_path: String,
+    output_bytes: u64,
+    stdout: String,
+    stderr: String,
+    exit_code: Option<i32>,
+    timed_out: bool,
+    message: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct QpdfExecutionResult {
+    stdout: String,
+    stderr: String,
+    exit_code: Option<i32>,
+    timed_out: bool,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct PageRange {
     start: u32,
@@ -63,9 +89,19 @@ struct PageRange {
 }
 
 #[tauri::command]
-pub fn qpdf_merge_pdfs(request: QpdfMergeRequest) -> Result<(), String> {
-    build_qpdf_merge_arguments(&request)?;
-    Err(qpdf_execution_disabled_error())
+pub fn qpdf_merge_pdfs(request: QpdfMergeRequest) -> QpdfMergeResult {
+    let output_path = request.output.trim().to_string();
+    execute_qpdf_merge(&request).unwrap_or_else(|message| QpdfMergeResult {
+        success: false,
+        operation: "merge",
+        output_path,
+        output_bytes: 0,
+        stdout: String::new(),
+        stderr: String::new(),
+        exit_code: None,
+        timed_out: false,
+        message,
+    })
 }
 
 #[tauri::command]
@@ -98,6 +134,102 @@ pub fn detect_qpdf_engine(platform: &str) -> QpdfEngineDetection {
 
 fn qpdf_execution_disabled_error() -> String {
     QPDF_EXECUTION_DISABLED_ERROR.to_string()
+}
+
+fn execute_qpdf_merge(request: &QpdfMergeRequest) -> Result<QpdfMergeResult, String> {
+    let plan = build_qpdf_merge_arguments(request)?;
+    let output_path = PathBuf::from(validate_pdf_path(&request.output, "Output PDF")?);
+    validate_merge_source_files(&request.sources)?;
+    validate_merge_output_path(&output_path)?;
+
+    let platform = current_platform_key();
+    let qpdf_path = resolve_qpdf_sidecar_path(platform)?;
+    let output_parent = output_path
+        .parent()
+        .ok_or_else(|| "Output PDF must have a converted output folder.".to_string())?;
+    fs::create_dir_all(output_parent).map_err(|error| {
+        format!(
+            "Unable to create converted output folder {}: {error}",
+            path_to_string(output_parent)
+        )
+    })?;
+
+    if output_path.exists() {
+        return Err(format!(
+            "Output PDF already exists and will not be overwritten: {}",
+            path_to_string(&output_path)
+        ));
+    }
+
+    let execution = run_qpdf_command(
+        &qpdf_path,
+        &plan.arguments,
+        Duration::from_secs(QPDF_MERGE_TIMEOUT_SECONDS),
+    )?;
+
+    if execution.timed_out {
+        remove_partial_output(&output_path);
+        return Ok(QpdfMergeResult {
+            success: false,
+            operation: "merge",
+            output_path: path_to_string(&output_path),
+            output_bytes: 0,
+            stdout: execution.stdout,
+            stderr: execution.stderr,
+            exit_code: execution.exit_code,
+            timed_out: true,
+            message: format!("qpdf merge timed out after {QPDF_MERGE_TIMEOUT_SECONDS} seconds."),
+        });
+    }
+
+    if execution.exit_code != Some(0) {
+        remove_partial_output(&output_path);
+        return Ok(QpdfMergeResult {
+            success: false,
+            operation: "merge",
+            output_path: path_to_string(&output_path),
+            output_bytes: 0,
+            stdout: execution.stdout,
+            stderr: execution.stderr,
+            exit_code: execution.exit_code,
+            timed_out: false,
+            message: "qpdf merge failed.".to_string(),
+        });
+    }
+
+    let output_metadata = fs::metadata(&output_path).map_err(|error| {
+        format!(
+            "qpdf reported success, but output PDF is missing: {}: {error}",
+            path_to_string(&output_path)
+        )
+    })?;
+
+    if output_metadata.len() == 0 {
+        remove_partial_output(&output_path);
+        return Ok(QpdfMergeResult {
+            success: false,
+            operation: "merge",
+            output_path: path_to_string(&output_path),
+            output_bytes: 0,
+            stdout: execution.stdout,
+            stderr: execution.stderr,
+            exit_code: execution.exit_code,
+            timed_out: false,
+            message: "qpdf reported success, but output PDF is empty.".to_string(),
+        });
+    }
+
+    Ok(QpdfMergeResult {
+        success: true,
+        operation: "merge",
+        output_path: path_to_string(&output_path),
+        output_bytes: output_metadata.len(),
+        stdout: execution.stdout,
+        stderr: execution.stderr,
+        exit_code: execution.exit_code,
+        timed_out: false,
+        message: "PDF merge completed locally with bundled qpdf.".to_string(),
+    })
 }
 
 fn detect_qpdf_engine_from_candidates<F>(
@@ -186,6 +318,68 @@ fn run_qpdf_version_smoke_check(path: &Path) -> Result<String, String> {
     Ok(version_line.to_string())
 }
 
+fn resolve_qpdf_sidecar_path(platform: &str) -> Result<PathBuf, String> {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let runtime_dir = std::env::current_exe()
+        .ok()
+        .and_then(|executable_path| executable_path.parent().map(Path::to_path_buf));
+    let candidates = qpdf_candidate_paths(platform, manifest_dir, runtime_dir.as_deref());
+
+    for candidate in candidates {
+        if !candidate.exists() {
+            continue;
+        }
+
+        let detection = detect_qpdf_engine_from_candidates(
+            platform,
+            &[candidate.clone()],
+            run_qpdf_version_smoke_check,
+        );
+        if detection.status == "available" {
+            return Ok(candidate);
+        }
+
+        return Err(detection.message);
+    }
+
+    Err("qpdf sidecar is not bundled for this platform.".to_string())
+}
+
+fn current_platform_key() -> &'static str {
+    let os = if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else if cfg!(target_os = "linux") {
+        "linux"
+    } else if cfg!(target_os = "android") {
+        "android"
+    } else if cfg!(target_os = "ios") {
+        "ios"
+    } else {
+        "unknown"
+    };
+
+    let arch = if cfg!(target_arch = "x86_64") {
+        "x86_64"
+    } else if cfg!(target_arch = "aarch64") {
+        "aarch64"
+    } else {
+        "unknown"
+    };
+
+    match (os, arch) {
+        ("windows", "x86_64") => "windows-x86_64",
+        ("windows", "aarch64") => "windows-aarch64",
+        ("macos", "aarch64") => "macos-aarch64",
+        ("macos", "x86_64") => "macos-x86_64",
+        ("linux", "x86_64") => "linux-x86_64",
+        ("android", "aarch64") => "android-aarch64",
+        ("ios", "aarch64") => "ios-aarch64",
+        _ => "unknown-unknown",
+    }
+}
+
 fn qpdf_candidate_paths(
     platform: &str,
     src_tauri_dir: &Path,
@@ -260,10 +454,10 @@ fn build_qpdf_merge_arguments(request: &QpdfMergeRequest) -> Result<QpdfCommandP
 
     let mut arguments = vec!["--empty".to_string(), "--pages".to_string()];
     for source in &request.sources {
-        arguments.push(validate_path_like(source, "Source PDF")?);
+        arguments.push(validate_pdf_path(source, "Source PDF")?);
     }
     arguments.push("--".to_string());
-    arguments.push(validate_path_like(&request.output, "Output PDF")?);
+    arguments.push(validate_pdf_path(&request.output, "Output PDF")?);
 
     Ok(qpdf_plan(arguments))
 }
@@ -336,6 +530,149 @@ fn validate_path_like(value: &str, label: &str) -> Result<String, String> {
     }
 
     Ok(trimmed.to_string())
+}
+
+fn validate_pdf_path(value: &str, label: &str) -> Result<String, String> {
+    let path = validate_path_like(value, label)?;
+    if !has_pdf_extension(Path::new(&path)) {
+        return Err(format!("{label} must use a .pdf extension: {path}"));
+    }
+
+    Ok(path)
+}
+
+fn has_pdf_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
+}
+
+fn validate_merge_source_files(sources: &[String]) -> Result<(), String> {
+    for source in sources {
+        let source_path = PathBuf::from(validate_pdf_path(source, "Source PDF")?);
+        let metadata = fs::metadata(&source_path).map_err(|error| {
+            format!(
+                "Source PDF does not exist or cannot be inspected: {}: {error}",
+                path_to_string(&source_path)
+            )
+        })?;
+
+        if !metadata.is_file() {
+            return Err(format!(
+                "Source PDF is not a file: {}",
+                path_to_string(&source_path)
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_merge_output_path(output_path: &Path) -> Result<(), String> {
+    if !has_pdf_extension(output_path) {
+        return Err(format!(
+            "Output PDF must use a .pdf extension: {}",
+            path_to_string(output_path)
+        ));
+    }
+
+    let parent = output_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| "Output PDF must have a converted output folder.".to_string())?;
+
+    if parent.file_name().and_then(|name| name.to_str()) != Some("converted") {
+        return Err(format!(
+            "Output PDF must be planned inside a converted folder: {}",
+            path_to_string(output_path)
+        ));
+    }
+
+    if output_path.exists() {
+        return Err(format!(
+            "Output PDF already exists and will not be overwritten: {}",
+            path_to_string(output_path)
+        ));
+    }
+
+    if parent.exists() && !parent.is_dir() {
+        return Err(format!(
+            "Converted output path exists but is not a folder: {}",
+            path_to_string(parent)
+        ));
+    }
+
+    Ok(())
+}
+
+fn run_qpdf_command(
+    executable: &Path,
+    arguments: &[String],
+    timeout: Duration,
+) -> Result<QpdfExecutionResult, String> {
+    let mut child = Command::new(executable)
+        .args(arguments)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| {
+            format!(
+                "Unable to start bundled qpdf sidecar {}: {error}",
+                path_to_string(executable)
+            )
+        })?;
+
+    let stdout_reader = child.stdout.take().map(read_pipe_in_thread);
+    let stderr_reader = child.stderr.take().map(read_pipe_in_thread);
+    let start = Instant::now();
+
+    let (exit_code, timed_out) = loop {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|error| format!("Unable to inspect qpdf process state: {error}"))?
+        {
+            break (status.code(), false);
+        }
+
+        if start.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            break (None, true);
+        }
+
+        thread::sleep(Duration::from_millis(50));
+    };
+
+    Ok(QpdfExecutionResult {
+        stdout: join_pipe_reader(stdout_reader),
+        stderr: join_pipe_reader(stderr_reader),
+        exit_code,
+        timed_out,
+    })
+}
+
+fn read_pipe_in_thread<R>(mut pipe: R) -> thread::JoinHandle<Vec<u8>>
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let mut buffer = Vec::new();
+        let _ = pipe.read_to_end(&mut buffer);
+        buffer
+    })
+}
+
+fn join_pipe_reader(reader: Option<thread::JoinHandle<Vec<u8>>>) -> String {
+    let bytes = reader
+        .and_then(|handle| handle.join().ok())
+        .unwrap_or_default();
+    String::from_utf8_lossy(&bytes).trim().to_string()
+}
+
+fn remove_partial_output(output_path: &Path) {
+    if output_path.exists() {
+        let _ = fs::remove_file(output_path);
+    }
 }
 
 fn normalize_rotation_degrees(degrees: i16) -> Result<String, String> {
@@ -482,6 +819,99 @@ mod tests {
     }
 
     #[test]
+    fn plans_merge_arguments_with_chinese_paths_and_spaces() {
+        let plan = build_qpdf_merge_arguments(&QpdfMergeRequest {
+            sources: vec![
+                "/Users/mac/Desktop/客户 文件/合同 一.pdf".to_string(),
+                "/Users/mac/Desktop/客户 文件/合同 二.pdf".to_string(),
+            ],
+            output: "/Users/mac/Desktop/客户 文件/converted/合同 合并.pdf".to_string(),
+        })
+        .expect("merge arguments should be planned");
+
+        assert_eq!(
+            plan.arguments,
+            vec![
+                "--empty",
+                "--pages",
+                "/Users/mac/Desktop/客户 文件/合同 一.pdf",
+                "/Users/mac/Desktop/客户 文件/合同 二.pdf",
+                "--",
+                "/Users/mac/Desktop/客户 文件/converted/合同 合并.pdf",
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_merge_requests() {
+        let too_few_sources = build_qpdf_merge_arguments(&QpdfMergeRequest {
+            sources: vec!["/Users/mac/Desktop/one.pdf".to_string()],
+            output: "/Users/mac/Desktop/converted/merged.pdf".to_string(),
+        });
+        assert_eq!(
+            too_few_sources,
+            Err("Merge requires at least two source PDFs.".to_string())
+        );
+
+        let empty_path = build_qpdf_merge_arguments(&QpdfMergeRequest {
+            sources: vec!["/Users/mac/Desktop/one.pdf".to_string(), " ".to_string()],
+            output: "/Users/mac/Desktop/converted/merged.pdf".to_string(),
+        });
+        assert_eq!(empty_path, Err("Source PDF path is required.".to_string()));
+    }
+
+    #[test]
+    fn rejects_non_pdf_merge_paths() {
+        let non_pdf_source = build_qpdf_merge_arguments(&QpdfMergeRequest {
+            sources: vec![
+                "/Users/mac/Desktop/one.pdf".to_string(),
+                "/Users/mac/Desktop/two.docx".to_string(),
+            ],
+            output: "/Users/mac/Desktop/converted/merged.pdf".to_string(),
+        });
+        assert_eq!(
+            non_pdf_source,
+            Err("Source PDF must use a .pdf extension: /Users/mac/Desktop/two.docx".to_string())
+        );
+
+        let non_pdf_output = build_qpdf_merge_arguments(&QpdfMergeRequest {
+            sources: vec![
+                "/Users/mac/Desktop/one.pdf".to_string(),
+                "/Users/mac/Desktop/two.pdf".to_string(),
+            ],
+            output: "/Users/mac/Desktop/converted/merged.txt".to_string(),
+        });
+        assert_eq!(
+            non_pdf_output,
+            Err(
+                "Output PDF must use a .pdf extension: /Users/mac/Desktop/converted/merged.txt"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn refuses_existing_merge_output() {
+        let case_dir = temp_fixture_path("overwrite");
+        let converted_dir = case_dir.join("converted");
+        fs::create_dir_all(&converted_dir).expect("converted test directory should be created");
+        let output = converted_dir.join("merged.pdf");
+        File::create(&output).expect("existing output fixture should be created");
+
+        let result = validate_merge_output_path(&output);
+
+        assert_eq!(
+            result,
+            Err(format!(
+                "Output PDF already exists and will not be overwritten: {}",
+                path_to_string(&output)
+            ))
+        );
+
+        let _ = fs::remove_dir_all(case_dir);
+    }
+
+    #[test]
     fn plans_split_arguments_as_data() {
         let plan = build_qpdf_split_arguments(&QpdfSplitRequest {
             source: "/Users/mac/Desktop/report.pdf".to_string(),
@@ -551,6 +981,47 @@ mod tests {
             "localconvert-qpdf-{name}-{}-{unique}",
             std::process::id()
         ))
+    }
+
+    fn write_tiny_pdf(path: &Path, label: &str) {
+        let stream = format!("BT /F1 24 Tf 72 720 Td ({label}) Tj ET\n");
+        let objects = vec![
+            "1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n".to_string(),
+            "2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n".to_string(),
+            "3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj\n".to_string(),
+            "4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n"
+                .to_string(),
+            format!(
+                "5 0 obj << /Length {} >> stream\n{}endstream endobj\n",
+                stream.len(),
+                stream
+            ),
+        ];
+
+        let mut data = Vec::from("%PDF-1.4\n".as_bytes());
+        let mut offsets = vec![0usize];
+        for object in objects {
+            offsets.push(data.len());
+            data.extend_from_slice(object.as_bytes());
+        }
+
+        let xref_offset = data.len();
+        data.extend_from_slice(
+            format!("xref\n0 {}\n0000000000 65535 f \n", offsets.len()).as_bytes(),
+        );
+        for offset in offsets.iter().skip(1) {
+            data.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        data.extend_from_slice(
+            format!(
+                "trailer << /Size {} /Root 1 0 R >>\nstartxref\n{}\n%%EOF\n",
+                offsets.len(),
+                xref_offset
+            )
+            .as_bytes(),
+        );
+
+        fs::write(path, data).expect("tiny PDF fixture should be written");
     }
 
     #[test]
@@ -660,6 +1131,40 @@ mod tests {
         assert!(detection.message.contains("qpdf version 12.3.2"));
     }
 
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[test]
+    fn qpdf_merge_execution_writes_only_planned_output() {
+        let case_dir = temp_fixture_path("execute-merge");
+        fs::create_dir_all(&case_dir).expect("merge smoke directory should be created");
+        let first = case_dir.join("one.pdf");
+        let second = case_dir.join("two.pdf");
+        let output = case_dir.join("converted").join("merged.pdf");
+        write_tiny_pdf(&first, "One");
+        write_tiny_pdf(&second, "Two");
+        let first_before = fs::read(&first).expect("first source should be readable");
+        let second_before = fs::read(&second).expect("second source should be readable");
+
+        let result = qpdf_merge_pdfs(QpdfMergeRequest {
+            sources: vec![path_to_string(&first), path_to_string(&second)],
+            output: path_to_string(&output),
+        });
+
+        assert!(result.success, "{}", result.message);
+        assert_eq!(result.output_path, path_to_string(&output));
+        assert!(result.output_bytes > 0);
+        assert!(output.exists());
+        assert_eq!(
+            fs::read(&first).expect("first source should remain readable"),
+            first_before
+        );
+        assert_eq!(
+            fs::read(&second).expect("second source should remain readable"),
+            second_before
+        );
+
+        let _ = fs::remove_dir_all(case_dir);
+    }
+
     #[test]
     fn valid_command_requests_return_execution_disabled_error() {
         let result = qpdf_extract_pages(QpdfExtractPagesRequest {
@@ -678,9 +1183,7 @@ mod tests {
             output: "/Users/mac/Desktop/converted/merged.pdf".to_string(),
         });
 
-        assert_eq!(
-            result,
-            Err("Merge requires at least two source PDFs.".to_string())
-        );
+        assert!(!result.success);
+        assert_eq!(result.message, "Merge requires at least two source PDFs.");
     }
 }
