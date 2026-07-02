@@ -215,7 +215,7 @@ Office rendering can differ from the source application's native output. The v1 
 
 ## Development Setup
 
-This repository includes a minimal Tauri v2, React, and TypeScript app scaffold for LocalConvert Desktop. The scaffold is intentionally limited to the desktop shell, landing page, and local engine self-check stub; it does not include real engine binaries and does not implement conversion yet.
+This repository includes a minimal Tauri v2, React, and TypeScript app scaffold for LocalConvert Desktop. The current implementation is intentionally limited to a file-intake and task-queue UI stub plus the local engine self-check stub; it does not include real engine binaries and does not implement conversion yet.
 
 Development machines need the normal Tauri v2 toolchain requirements for the target platform, including Node.js, npm, Rust, Cargo, and platform-specific build dependencies.
 
