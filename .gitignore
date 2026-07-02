@@ -8,6 +8,7 @@ build/
 # Rust and Tauri build output
 target/
 src-tauri/target/
+src-tauri/gen/schemas/
 
 # Bundled conversion engines and local engine cache
 src-tauri/binaries/
