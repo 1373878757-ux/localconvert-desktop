@@ -2,6 +2,8 @@
 
 by 田宸宇
 
+Slogan: 让可能，发生在这儿。
+
 ## Project Overview
 
 LocalConvert Desktop is a desktop-first file conversion app for people who want reliable local conversion without sending files to a cloud service.
@@ -266,6 +268,8 @@ The packaging process should include a post-install smoke test pass that confirm
 ## Smoke Tests
 
 Before a release, verify these scenarios on a clean install.
+
+Preview 0.1 manual release checklist: `docs/manual-test-preview-0.1.md`.
 
 Current qpdf PDF tools checklist:
 
