@@ -1,0 +1,96 @@
+{
+  "schemaVersion": 1,
+  "product": "LocalConvert Desktop",
+  "platformMatrix": {
+    "desktopFullEdition": [
+      "windows-x86_64",
+      "windows-aarch64",
+      "macos-aarch64",
+      "macos-x86_64",
+      "linux-x86_64"
+    ],
+    "mobileLiteEditionFutureOnly": [
+      "android-aarch64",
+      "ios-aarch64"
+    ]
+  },
+  "v1EnabledPlatforms": [
+    "windows-x86_64",
+    "macos-aarch64"
+  ],
+  "futurePlatforms": [
+    "windows-aarch64",
+    "macos-x86_64",
+    "linux-x86_64",
+    "android-aarch64",
+    "ios-aarch64"
+  ],
+  "rules": {
+    "fullBundledEngineEdition": "desktop-only",
+    "mobileOfficeConversion": "Do not promise LibreOffice-based Office conversion on Android or iOS.",
+    "sidecarDestination": "src-tauri/binaries/<platform>/",
+    "runtimeDestination": "src-tauri/resources/engines/<engine>/<platform>/",
+    "fontsDestination": "src-tauri/resources/fonts/",
+    "licensesDestination": "src-tauri/resources/licenses/",
+    "frontendExecution": "Frontend calls Rust backend commands only.",
+    "backendExecution": "Rust backend commands spawn sidecars using argument arrays.",
+    "shellPolicy": "Do not use shell=true and do not concatenate shell command strings."
+  },
+  "requiredEngines": [
+    {
+      "name": "libreoffice",
+      "displayName": "LibreOffice headless",
+      "desktopOnly": true,
+      "responsibility": "Office-to-PDF conversion.",
+      "requiredAssetTypes": [
+        "sidecar",
+        "runtime-folder"
+      ]
+    },
+    {
+      "name": "qpdf",
+      "displayName": "qpdf",
+      "desktopOnly": true,
+      "responsibility": "PDF merge, split, extraction, and rotation.",
+      "requiredAssetTypes": [
+        "sidecar"
+      ]
+    },
+    {
+      "name": "pdfium",
+      "displayName": "PDFium",
+      "desktopOnly": true,
+      "responsibility": "PDF rasterization and preview.",
+      "requiredAssetTypes": [
+        "library"
+      ]
+    },
+    {
+      "name": "image-engine",
+      "displayName": "image-engine",
+      "desktopOnly": true,
+      "responsibility": "Image conversion, compression, resizing, and EXIF removal.",
+      "requiredAssetTypes": [
+        "sidecar"
+      ]
+    }
+  ],
+  "assetRecordRequiredFields": [
+    "name",
+    "version",
+    "platform",
+    "type",
+    "source",
+    "sha256",
+    "license",
+    "destination"
+  ],
+  "allowedAssetTypes": [
+    "sidecar",
+    "runtime-folder",
+    "library",
+    "font",
+    "license"
+  ],
+  "assets": []
+}

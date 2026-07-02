@@ -43,13 +43,36 @@ The v1 scope should prioritize these conversion groups:
 
 | Category | Supported operations |
 | --- | --- |
-| Office to PDF | Convert DOCX, PPTX, and XLSX files to PDF using LibreOffice headless mode. |
+| Office to PDF | Convert DOC, DOCX, PPT, PPTX, XLS, XLSX, ODT, ODS, and ODP files to PDF using LibreOffice headless mode. |
 | Images | Convert common image formats, apply compression presets, resize images, and remove EXIF metadata. |
 | Images to PDF | Combine multiple images into one PDF in user-selected order. |
 | PDF structure | Merge PDFs, split PDFs, extract page ranges, and rotate pages. |
 | PDF rasterization | Convert PDF pages to images and generate previews. |
 
 Format support should be expanded only when the local engine path, output validation, and packaging story are reliable.
+
+## Platform Matrix
+
+LocalConvert Desktop should support a full desktop platform matrix at the architecture level, but v1 delivery only enables platforms whose bundled engine assets are available and verified.
+
+Desktop full edition platforms:
+
+| Platform key | Status | Notes |
+| --- | --- | --- |
+| `windows-x86_64` | v1 enabled | First-priority Windows x64 desktop build. |
+| `windows-aarch64` | Future | Desktop full edition only when all engine assets are available. |
+| `macos-aarch64` | v1 enabled | Second-priority macOS Apple Silicon desktop build. |
+| `macos-x86_64` | Future | Desktop full edition only when all engine assets are available. |
+| `linux-x86_64` | Future | Desktop full edition only when all engine assets are available. |
+
+Future mobile lite edition platforms:
+
+| Platform key | Status | Notes |
+| --- | --- | --- |
+| `android-aarch64` | Future lite only | Do not promise bundled desktop engines or LibreOffice-based Office conversion. |
+| `ios-aarch64` | Future lite only | Do not promise bundled desktop engines or LibreOffice-based Office conversion. |
+
+The full bundled engine edition is desktop-only. Android and iOS are future lite editions and must not be described as supporting LibreOffice-based Office conversion.
 
 ## Architecture
 
@@ -66,14 +89,38 @@ The frontend should not directly shell out to conversion tools. It should call T
 
 Runtime installers should include the conversion engines required for the supported v1 feature set.
 
-| Engine | Responsibility |
-| --- | --- |
-| LibreOffice headless | Office-to-PDF conversion for DOCX, PPTX, and XLSX files. |
-| Sharp/libvips-equivalent | Image conversion, compression, resizing, and metadata stripping. |
-| qpdf | PDF structure operations such as merge, split, page extraction, and rotation. |
-| Poppler/PDFium | PDF rasterization, page-to-image conversion, thumbnails, and previews. |
+| Engine | Responsibility | Minimum v1 asset types |
+| --- | --- | --- |
+| LibreOffice headless | Office-to-PDF conversion for DOC, DOCX, PPT, PPTX, XLS, XLSX, ODT, ODS, and ODP. | `sidecar`, `runtime-folder` |
+| qpdf | PDF structure operations such as merge, split, page extraction, and rotation. | `sidecar` |
+| PDFium | PDF rasterization, page-to-image conversion, thumbnails, and previews. | `library` |
+| image-engine | Image conversion, compression, resizing, and EXIF removal. | `sidecar` |
 
 The exact packaging layout can vary by platform, but the app should resolve engines from its own bundled resources instead of expecting users to install command-line tools manually.
+
+Engine asset structure:
+
+```text
+src-tauri/binaries/<platform>/
+src-tauri/resources/engines/<engine>/<platform>/
+src-tauri/resources/fonts/
+src-tauri/resources/licenses/
+src-tauri/engine-manifest.json
+src-tauri/scripts/fetch-engines.mjs
+src-tauri/scripts/verify-engines.mjs
+src-tauri/scripts/prepare-sidecars.mjs
+```
+
+Asset placement rules:
+
+- Executable sidecars go under `src-tauri/binaries/<platform>/`.
+- Large runtime folders go under `src-tauri/resources/engines/<engine>/<platform>/`.
+- Fonts go under `src-tauri/resources/fonts/`.
+- Licenses and third-party notices go under `src-tauri/resources/licenses/`.
+- Each engine asset must be recorded in `src-tauri/engine-manifest.json` with `name`, `version`, `platform`, `type`, `source`, `sha256`, `license`, and `destination`.
+- v1 release packaging must fail clearly when required engine assets for `windows-x86_64` or `macos-aarch64` are missing.
+- Future desktop platforms remain disabled until all required engine assets are present and verified.
+- Mobile lite platforms must not include the full bundled desktop engine set.
 
 ## Privacy and Security Model
 
@@ -92,6 +139,10 @@ Process execution must follow these rules:
 - Use argument-array command execution.
 - Do not use `shell=true`.
 - Pass file paths as arguments, not by string-concatenating shell commands.
+- Do not concatenate shell command strings.
+- Do not call conversion binaries directly from the frontend.
+- The frontend must call Rust backend commands only.
+- Rust backend commands must spawn sidecars using argument arrays.
 - Support paths containing spaces, CJK characters, long filenames, and platform-specific path separators.
 - Use explicit sidecar paths resolved from the application bundle.
 - Apply per-task timeouts.
@@ -192,12 +243,21 @@ npm run tauri build
 
 Packaging should focus on a complete offline installer:
 
+- Use Tauri `externalBin` for executable sidecars.
+- Use Tauri `resources` for LibreOffice runtime folders, PDFium libraries, fonts, and license files.
 - Bundle sidecar conversion engines into the app package.
 - Resolve engine paths from the installed application bundle.
 - Include all runtime files needed for supported v1 conversions.
+- Run `src-tauri/scripts/verify-engines.mjs` before release packaging.
+- Run `src-tauri/scripts/prepare-sidecars.mjs` before release packaging.
+- Add a startup engine self-check in the Rust backend.
+- Verify required files exist before enabling conversion actions.
+- Verify executable permission on macOS and Linux sidecars.
+- Verify engine version commands where available.
+- Show clear local errors when bundled engines are missing or invalid.
 - Verify that conversions work on a clean machine without manually installed conversion tools.
 - Verify that conversions work while the machine is offline.
-- Keep installer behavior platform-appropriate for macOS, Windows, and Linux.
+- Keep installer behavior platform-appropriate for enabled desktop targets.
 
 The packaging process should include a post-install smoke test pass that confirms the app can run supported conversions without network access.
 

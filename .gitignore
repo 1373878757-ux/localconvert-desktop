@@ -12,6 +12,8 @@ src-tauri/target/
 # Bundled conversion engines and local engine cache
 src-tauri/binaries/
 src-tauri/resources/engines/
+src-tauri/resources/fonts/
+src-tauri/resources/licenses/
 src-tauri/.engine-cache/
 
 # Logs
