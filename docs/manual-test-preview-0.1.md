@@ -2,7 +2,7 @@
 
 LocalConvert Desktop by 田宸宇.
 
-Slogan: 让可能，发生在这儿。
+Slogan: 让可能发生在这儿。
 
 This checklist verifies Preview 0.1 on macOS Apple Silicon with bundled qpdf 12.3.2. Run tests offline where possible and use disposable PDF copies for operation checks.
 
@@ -19,8 +19,8 @@ This checklist verifies Preview 0.1 on macOS Apple Silicon with bundled qpdf 12.
 - [ ] Confirm the startup splash appears before the main workbench.
 - [ ] Confirm the splash shows `LocalConvert Desktop`.
 - [ ] Confirm the splash shows `by 田宸宇`.
-- [ ] Confirm the splash shows `让可能，发生在这儿。`.
-- [ ] Confirm the splash includes `No upload. Files stay on this computer.`
+- [ ] Confirm the splash shows `让可能发生在这儿。`.
+- [ ] Confirm the splash includes `不上传，文件始终留在本机。`
 - [ ] Confirm the main workbench appears after startup initialization.
 
 ## Engine Self-Check

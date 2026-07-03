@@ -21,7 +21,7 @@ export type LocalTask = {
 export function getExtension(fileName: string): string {
   const dotIndex = fileName.lastIndexOf(".");
   if (dotIndex <= 0 || dotIndex === fileName.length - 1) {
-    return "unknown";
+    return "未知";
   }
 
   return fileName.slice(dotIndex + 1).toLowerCase();
@@ -30,7 +30,7 @@ export function getExtension(fileName: string): string {
 export function getBaseName(fileName: string): string {
   const dotIndex = fileName.lastIndexOf(".");
   if (dotIndex <= 0) {
-    return fileName || "untitled";
+    return fileName || "未命名";
   }
 
   return fileName.slice(0, dotIndex);
@@ -78,7 +78,7 @@ export function createTaskFromFile(
   existingOutputNames: readonly string[],
   now = Date.now()
 ): LocalTask {
-  const displayName = file.name || "untitled";
+  const displayName = file.name || "未命名";
   const fileWithOptionalPath = file as File & {
     path?: string;
     webkitRelativePath?: string;

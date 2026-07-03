@@ -2,7 +2,7 @@
 
 by 田宸宇
 
-Slogan: 让可能，发生在这儿。
+Slogan: 让可能发生在这儿。
 
 ## Project Overview
 

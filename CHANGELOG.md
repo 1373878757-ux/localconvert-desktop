@@ -4,7 +4,7 @@
 
 LocalConvert Desktop by 田宸宇.
 
-Slogan: 让可能，发生在这儿。
+Slogan: 让可能发生在这儿。
 
 Preview 0.1 is the first local PDF tools preview for macOS Apple Silicon. It focuses on a small, reliable qpdf-backed feature set and keeps conversion local to the user's computer.
 

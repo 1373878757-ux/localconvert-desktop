@@ -101,7 +101,7 @@ type QpdfRotateResult = {
 };
 
 const fallbackSelfCheck: EngineSelfCheck = {
-  platform: "desktop scaffold",
+  platform: "桌面预览",
   fullEdition: true,
   conversionEnabled: false,
   engines: [
@@ -109,44 +109,44 @@ const fallbackSelfCheck: EngineSelfCheck = {
       name: "LibreOffice headless",
       status: "not-installed",
       requiredForV1: true,
-      message: "Not bundled yet."
+      message: "尚未内置。"
     },
     {
       name: "qpdf",
       status: "not-installed",
       requiredForV1: true,
-      message: "Not bundled yet."
+      message: "尚未内置。"
     },
     {
       name: "PDFium",
       status: "not-installed",
       requiredForV1: true,
-      message: "Not bundled yet."
+      message: "尚未内置。"
     },
     {
       name: "image-engine",
       status: "not-installed",
       requiredForV1: true,
-      message: "Not bundled yet."
+      message: "尚未内置。"
     }
   ]
 };
 
 const toolCategories = [
-  { label: "PDF Tools", enabled: true, note: "Enabled" },
-  { label: "Batch Queue", enabled: true, note: "Local" },
-  { label: "Documents to PDF", enabled: false, note: "Later" },
-  { label: "Image Conversion", enabled: false, note: "Later" },
-  { label: "Image Compression", enabled: false, note: "Later" },
-  { label: "Images to PDF", enabled: false, note: "Later" }
+  { label: "PDF 工具", enabled: true, note: "可用" },
+  { label: "批量队列", enabled: true, note: "本地" },
+  { label: "文档转 PDF", enabled: false, note: "稍后" },
+  { label: "图片转换", enabled: false, note: "稍后" },
+  { label: "图片压缩", enabled: false, note: "稍后" },
+  { label: "图片转 PDF", enabled: false, note: "稍后" }
 ];
 
 const statusLabels: Record<TaskStatus, string> = {
-  waiting: "Waiting",
-  converting: "Converting",
-  completed: "Completed",
-  failed: "Failed",
-  cancelled: "Cancelled"
+  waiting: "等待中",
+  converting: "处理中",
+  completed: "已完成",
+  failed: "失败",
+  cancelled: "已取消"
 };
 
 const outputNameExample = [
@@ -158,7 +158,7 @@ const outputNameExample = [
 function App() {
   const [selfCheck, setSelfCheck] = useState<EngineSelfCheck>(fallbackSelfCheck);
   const [tasks, setTasks] = useState<LocalTask[]>([]);
-  const [activeTool, setActiveTool] = useState("PDF Tools");
+  const [activeTool, setActiveTool] = useState("PDF 工具");
   const [dragActive, setDragActive] = useState(false);
   const [folderMessage, setFolderMessage] = useState("");
   const [startupError, setStartupError] = useState("");
@@ -191,7 +191,7 @@ function App() {
         setSelfCheck(await invoke<EngineSelfCheck>("engine_self_check"));
       } catch {
         setSelfCheck(fallbackSelfCheck);
-        setStartupError("Startup status and engine self-check were unavailable.");
+        setStartupError("启动状态和引擎自检不可用。");
       }
     }
 
@@ -219,7 +219,7 @@ function App() {
   const selectedTaskWithError = tasks.find((task) => task.errorLog);
   const inspectorErrorLog =
     selectedTaskWithError?.errorLog ||
-    (startupError ? `Startup initialization issue:\n${startupError}` : "");
+    (startupError ? `启动初始化问题:\n${startupError}` : "");
   const qpdfEngine = selfCheck.engines.find((engine) => engine.name === "qpdf");
   const qpdfAvailable = qpdfEngine?.status === "available";
   const realLocalPdfTasks = tasks.filter(
@@ -321,60 +321,76 @@ function App() {
 
   function formatMergeLog(result: QpdfMergeResult) {
     return [
-      result.message,
-      `Output: ${result.outputPath || "not written"}`,
-      `Output bytes: ${result.outputBytes}`,
-      `Exit code: ${result.exitCode ?? "none"}`,
-      `Timed out: ${result.timedOut ? "yes" : "no"}`,
-      result.stdout ? `stdout:\n${result.stdout}` : "stdout: <empty>",
-      result.stderr ? `stderr:\n${result.stderr}` : "stderr: <empty>"
+      `引擎消息: ${result.message}`,
+      `输出: ${result.outputPath || "未写入"}`,
+      `输出大小: ${result.outputBytes} 字节`,
+      `退出码: ${result.exitCode ?? "无"}`,
+      `是否超时: ${result.timedOut ? "是" : "否"}`,
+      result.stdout ? `stdout:\n${result.stdout}` : "stdout: <空>",
+      result.stderr ? `stderr:\n${result.stderr}` : "stderr: <空>"
     ].join("\n");
   }
 
   function formatSplitLog(result: QpdfSplitResult) {
     return [
-      result.message,
-      `Source: ${result.sourcePath || "not available"}`,
-      `Output folder: ${result.outputDirectory || "not created"}`,
-      `Outputs: ${result.outputPaths.length}`,
+      `引擎消息: ${result.message}`,
+      `源文件: ${result.sourcePath || "不可用"}`,
+      `输出文件夹: ${result.outputDirectory || "未创建"}`,
+      `输出数量: ${result.outputPaths.length}`,
       result.outputPaths.length > 0
-        ? `Output paths:\n${result.outputPaths.join("\n")}`
-        : "Output paths: <none>",
-      `Output bytes: ${result.outputBytes}`,
-      `Exit code: ${result.exitCode ?? "none"}`,
-      `Timed out: ${result.timedOut ? "yes" : "no"}`,
-      result.stdout ? `stdout:\n${result.stdout}` : "stdout: <empty>",
-      result.stderr ? `stderr:\n${result.stderr}` : "stderr: <empty>"
+        ? `输出路径:\n${result.outputPaths.join("\n")}`
+        : "输出路径: <无>",
+      `输出大小: ${result.outputBytes} 字节`,
+      `退出码: ${result.exitCode ?? "无"}`,
+      `是否超时: ${result.timedOut ? "是" : "否"}`,
+      result.stdout ? `stdout:\n${result.stdout}` : "stdout: <空>",
+      result.stderr ? `stderr:\n${result.stderr}` : "stderr: <空>"
     ].join("\n");
   }
 
   function formatExtractLog(result: QpdfExtractResult) {
     return [
-      result.message,
-      `Source: ${result.sourcePath || "not available"}`,
-      `Output: ${result.outputPath || "not written"}`,
-      `Output bytes: ${result.outputBytes}`,
-      `Pages: ${result.pages || "not selected"}`,
-      `Exit code: ${result.exitCode ?? "none"}`,
-      `Timed out: ${result.timedOut ? "yes" : "no"}`,
-      result.stdout ? `stdout:\n${result.stdout}` : "stdout: <empty>",
-      result.stderr ? `stderr:\n${result.stderr}` : "stderr: <empty>"
+      `引擎消息: ${result.message}`,
+      `源文件: ${result.sourcePath || "不可用"}`,
+      `输出: ${result.outputPath || "未写入"}`,
+      `输出大小: ${result.outputBytes} 字节`,
+      `页面: ${result.pages || "未选择"}`,
+      `退出码: ${result.exitCode ?? "无"}`,
+      `是否超时: ${result.timedOut ? "是" : "否"}`,
+      result.stdout ? `stdout:\n${result.stdout}` : "stdout: <空>",
+      result.stderr ? `stderr:\n${result.stderr}` : "stderr: <空>"
     ].join("\n");
   }
 
   function formatRotateLog(result: QpdfRotateResult) {
     return [
-      result.message,
-      `Source: ${result.sourcePath || "not available"}`,
-      `Output: ${result.outputPath || "not written"}`,
-      `Output bytes: ${result.outputBytes}`,
-      `Rotation: ${result.degrees || "not applied"}`,
-      `Pages: ${result.pages || "not selected"}`,
-      `Exit code: ${result.exitCode ?? "none"}`,
-      `Timed out: ${result.timedOut ? "yes" : "no"}`,
-      result.stdout ? `stdout:\n${result.stdout}` : "stdout: <empty>",
-      result.stderr ? `stderr:\n${result.stderr}` : "stderr: <empty>"
+      `引擎消息: ${result.message}`,
+      `源文件: ${result.sourcePath || "不可用"}`,
+      `输出: ${result.outputPath || "未写入"}`,
+      `输出大小: ${result.outputBytes} 字节`,
+      `旋转: ${result.degrees || "未应用"}`,
+      `页面: ${result.pages || "未选择"}`,
+      `退出码: ${result.exitCode ?? "无"}`,
+      `是否超时: ${result.timedOut ? "是" : "否"}`,
+      result.stdout ? `stdout:\n${result.stdout}` : "stdout: <空>",
+      result.stderr ? `stderr:\n${result.stderr}` : "stderr: <空>"
     ].join("\n");
+  }
+
+  function formatEngineMessage(engine: EngineStatus) {
+    if (engine.status === "not-installed") {
+      return "尚未内置。";
+    }
+
+    if (engine.name === "qpdf" && engine.status === "available") {
+      return "qpdf 可用，内置引擎自检已通过。";
+    }
+
+    if (engine.status === "error") {
+      return `本地检查失败：${engine.message}`;
+    }
+
+    return engine.message;
   }
 
   function canSplitPdfTask(task: LocalTask) {
@@ -419,32 +435,30 @@ function App() {
 
   function pdfToolsGuidance() {
     if (!qpdfAvailable) {
-      return "Bundled qpdf is unavailable. PDF tools stay disabled until the local sidecar passes self-check.";
+      return "内置 qpdf 不可用。PDF 工具会保持禁用，直到内置 qpdf 程序通过自检。";
     }
 
     if (selectedTasks.length === 0) {
-      return "Select PDF tasks in the queue to enable local PDF tools.";
+      return "请在任务队列中选择 PDF 任务，以启用本地 PDF 工具。";
     }
 
     if (selectedNonPdfTasks.length > 0) {
-      return "Only PDF tasks can use the current qpdf tools. Office and image conversions are not enabled yet.";
+      return "当前 qpdf 工具仅支持 PDF 任务。Office 和图片转换尚未启用。";
     }
 
     if (selectedPdfTasksWithoutPath.length > 0) {
-      return "Some selected PDFs only have display metadata. qpdf tools need a real local file path from the desktop app.";
+      return "部分所选 PDF 只有显示元数据。qpdf 工具需要桌面端提供真实本地路径。";
     }
 
     if (selectedCancelledPdfTasks.length > 0) {
-      return "Cancelled PDF tasks cannot run qpdf operations. Retry or remove them before using PDF tools.";
+      return "已取消的 PDF 任务不能执行 qpdf 操作。请先重试或移除它们。";
     }
 
     if (selectedHasConvertingTask) {
-      return "A selected PDF is already running. Wait for it to finish before starting another qpdf operation.";
+      return "所选 PDF 中已有任务正在处理。请等待完成后再启动新的 qpdf 操作。";
     }
 
-    return `${selectedRealLocalPdfTasks.length} local PDF task${
-      selectedRealLocalPdfTasks.length === 1 ? "" : "s"
-    } selected. Merge needs 2 or more; split, rotate, and extract need exactly 1.`;
+    return `已选择 ${selectedRealLocalPdfTasks.length} 个可用本地 PDF。合并需要 2 个或更多；拆分、旋转和提取需要正好 1 个。`;
   }
 
   function addFiles(fileList: FileList | File[]) {
@@ -565,7 +579,7 @@ function App() {
     try {
       const firstSourcePath = mergeTasks[0].sourcePath;
       if (!firstSourcePath) {
-        throw new Error("PDF merge requires real local source paths.");
+        throw new Error("PDF 合并需要真实的本地源文件路径。");
       }
 
       const outputSource = buildSiblingPath(firstSourcePath, "merged.pdf");
@@ -598,12 +612,12 @@ function App() {
       );
       setFolderMessage(
         result.success
-          ? `Merged ${mergeTasks.length} PDFs locally. Output: ${result.outputPath}`
-          : "PDF merge failed locally. Check the failed task error log."
+          ? `已在本地合并 ${mergeTasks.length} 个 PDF。输出：${result.outputPath}`
+          : "PDF 合并失败。请查看失败任务的错误日志。"
       );
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : "PDF merge failed locally.";
+        error instanceof Error ? error.message : "PDF 合并失败。";
       setTasks((currentTasks) =>
         currentTasks.map((task) =>
           taskIds.has(task.id)
@@ -615,14 +629,14 @@ function App() {
             : task
         )
       );
-      setFolderMessage("PDF merge failed locally. Check the failed task error log.");
+      setFolderMessage("PDF 合并失败。请查看失败任务的错误日志。");
     }
   }
 
   async function splitPdfTask(task: LocalTask) {
     if (!canSplitPdfTask(task) || !task.sourcePath) {
       setFolderMessage(
-        "PDF split requires bundled qpdf and one local PDF file with a real path."
+        "PDF 拆分需要内置 qpdf 和 1 个带真实路径的本地 PDF。"
       );
       return;
     }
@@ -649,7 +663,7 @@ function App() {
       });
       const log = formatSplitLog(result);
       const outputPreview = result.success
-        ? `${result.outputPaths.length} files in ${result.outputDirectory}`
+        ? `${result.outputPaths.length} 个文件，位于 ${result.outputDirectory}`
         : task.outputPreview;
 
       setTasks((currentTasks) =>
@@ -666,12 +680,12 @@ function App() {
       );
       setFolderMessage(
         result.success
-          ? `Split PDF locally into ${result.outputPaths.length} files: ${result.outputPaths.join(" | ")}`
-          : "PDF split failed locally. Check the failed task error log."
+          ? `已在本地拆分 PDF，生成 ${result.outputPaths.length} 个文件：${result.outputPaths.join(" | ")}`
+          : "PDF 拆分失败。请查看失败任务的错误日志。"
       );
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : "PDF split failed locally.";
+        error instanceof Error ? error.message : "PDF 拆分失败。";
       setTasks((currentTasks) =>
         currentTasks.map((currentTask) =>
           currentTask.id === task.id
@@ -683,21 +697,21 @@ function App() {
             : currentTask
         )
       );
-      setFolderMessage("PDF split failed locally. Check the failed task error log.");
+      setFolderMessage("PDF 拆分失败。请查看失败任务的错误日志。");
     }
   }
 
   async function extractPdfPages(task: LocalTask) {
     if (!canExtractPdfTask(task) || !task.sourcePath) {
       setFolderMessage(
-        "PDF page extraction requires bundled qpdf and one local PDF file with a real path."
+        "PDF 页面提取需要内置 qpdf 和 1 个带真实路径的本地 PDF。"
       );
       return;
     }
 
     const pages = extractPageRange.trim();
     if (!pages) {
-      setFolderMessage("Enter a page range before extracting pages, for example 1,3,5-7.");
+      setFolderMessage("请输入要提取的页面范围，例如 1,3,5-7。");
       return;
     }
 
@@ -748,12 +762,12 @@ function App() {
       );
       setFolderMessage(
         result.success
-          ? `Extracted pages ${result.pages} locally. Output: ${result.outputPath}`
-          : "PDF page extraction failed locally. Check the failed task error log."
+          ? `已在本地提取页面 ${result.pages}。输出：${result.outputPath}`
+          : "PDF 页面提取失败。请查看失败任务的错误日志。"
       );
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : "PDF page extraction failed locally.";
+        error instanceof Error ? error.message : "PDF 页面提取失败。";
       setTasks((currentTasks) =>
         currentTasks.map((currentTask) =>
           currentTask.id === task.id
@@ -765,14 +779,14 @@ function App() {
             : currentTask
         )
       );
-      setFolderMessage("PDF page extraction failed locally. Check the failed task error log.");
+      setFolderMessage("PDF 页面提取失败。请查看失败任务的错误日志。");
     }
   }
 
   async function rotatePdfTask(task: LocalTask, degrees: 90 | 180 | -90) {
     if (!canRotatePdfTask(task) || !task.sourcePath) {
       setFolderMessage(
-        "PDF rotate requires bundled qpdf and one local PDF file with a real path."
+        "PDF 旋转需要内置 qpdf 和 1 个带真实路径的本地 PDF。"
       );
       return;
     }
@@ -825,12 +839,12 @@ function App() {
       );
       setFolderMessage(
         result.success
-          ? `Rotated PDF locally (${result.degrees}). Output: ${result.outputPath}`
-          : "PDF rotate failed locally. Check the failed task error log."
+          ? `已在本地旋转 PDF（${result.degrees}）。输出：${result.outputPath}`
+          : "PDF 旋转失败。请查看失败任务的错误日志。"
       );
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : "PDF rotate failed locally.";
+        error instanceof Error ? error.message : "PDF 旋转失败。";
       setTasks((currentTasks) =>
         currentTasks.map((currentTask) =>
           currentTask.id === task.id
@@ -842,7 +856,7 @@ function App() {
             : currentTask
         )
       );
-      setFolderMessage("PDF rotate failed locally. Check the failed task error log.");
+      setFolderMessage("PDF 旋转失败。请查看失败任务的错误日志。");
     }
   }
 
@@ -853,19 +867,19 @@ function App() {
           <h1>LocalConvert Desktop</h1>
           <p>by 田宸宇</p>
         </div>
-        <div className="privacy-status" aria-label="Local privacy status">
-          <span>Files stay on this computer</span>
-          <span>No upload</span>
-          <span>Local queue</span>
+        <div className="privacy-status" aria-label="本地隐私状态">
+          <span>文件仅在本机处理</span>
+          <span>不上传</span>
+          <span>本地队列</span>
           <span>
-            {qpdfAvailable ? "PDF qpdf tools enabled" : "Conversion disabled"}
+            {qpdfAvailable ? "PDF qpdf 工具已启用" : "转换未启用"}
           </span>
         </div>
       </header>
 
       <div className="workbench">
-        <aside className="sidebar" aria-label="Tool categories">
-          <div className="sidebar-section-title">Tools</div>
+        <aside className="sidebar" aria-label="工具分类">
+          <div className="sidebar-section-title">工具</div>
           <nav className="tool-nav">
             {toolCategories.map((tool) => (
               <button
@@ -876,8 +890,8 @@ function App() {
                 disabled={!tool.enabled}
                 title={
                   tool.enabled
-                    ? `${tool.label} is available in this preview.`
-                    : `${tool.label} is not enabled yet.`
+                    ? `${tool.label} 在此预览版中可用。`
+                    : `${tool.label} 尚未启用。`
                 }
               >
                 <span>{tool.label}</span>
@@ -886,16 +900,16 @@ function App() {
             ))}
           </nav>
           <div className="sidebar-note">
-            <strong>PDF tools preview</strong>
-            <span>Only qpdf PDF tools are enabled. Office and image tools remain off.</span>
+            <strong>PDF 工具预览</strong>
+            <span>当前仅启用 qpdf PDF 工具。Office 和图片工具仍未启用。</span>
           </div>
         </aside>
 
-        <section className="main-pane" aria-label="File queue workbench">
+        <section className="main-pane" aria-label="文件队列工作台">
           <div className="pane-header">
             <div>
               <p className="section-kicker">{activeTool}</p>
-              <h2>File intake</h2>
+              <h2>文件导入</h2>
             </div>
             <button
               type="button"
@@ -903,13 +917,13 @@ function App() {
               onClick={clearCompletedTasks}
               disabled={summary.completed === 0}
             >
-              Clear completed
+              清除已完成
             </button>
           </div>
 
           <section
             className={dragActive ? "drop-zone is-active" : "drop-zone"}
-            aria-label="Drop files"
+            aria-label="拖放文件"
             onDragEnter={(event) => {
               event.preventDefault();
               setDragActive(true);
@@ -925,23 +939,23 @@ function App() {
             onDrop={handleDrop}
           >
             <div>
-              <h3>Drag files here or select files.</h3>
-              <p>Name, size, extension, and display path only.</p>
+              <h3>将文件拖到这里，或点击选择文件。</h3>
+              <p>仅保存名称、大小、扩展名和显示路径。</p>
             </div>
             <div className="button-row">
               <button type="button" onClick={() => fileInputRef.current?.click()}>
-                Select files
+                选择文件
               </button>
               <button
                 type="button"
                 className="secondary-button"
                 onClick={() =>
                   setFolderMessage(
-                    "Folder selection will be enabled later through native Tauri permissions after the conversion pipeline exists."
+                    "文件夹选择将在转换流程完成后，通过原生 Tauri 权限启用。"
                   )
                 }
               >
-                Select folder
+                选择文件夹
               </button>
             </div>
             <input
@@ -955,7 +969,7 @@ function App() {
 
           {folderMessage ? <p className="inline-note">{folderMessage}</p> : null}
 
-          <section className="status-summary" aria-label="Task status summary">
+          <section className="status-summary" aria-label="任务状态汇总">
             {(Object.keys(statusLabels) as TaskStatus[]).map((status) => (
               <article className="summary-cell" key={status}>
                 <span>{statusLabels[status]}</span>
@@ -964,16 +978,16 @@ function App() {
             ))}
           </section>
 
-          <section className="pdf-tools-panel" aria-label="PDF tools">
+          <section className="pdf-tools-panel" aria-label="PDF 工具">
             <div className="pdf-tools-header">
               <div>
-                <p className="section-kicker">PDF Tools</p>
-                <h2>Local qpdf tools</h2>
-                <p>Files stay on this computer. PDF tools use bundled qpdf.</p>
+                <p className="section-kicker">PDF 工具</p>
+                <h2>本地 qpdf 工具</h2>
+                <p>文件仅在本机处理。PDF 工具使用内置 qpdf。</p>
               </div>
               <div className="selection-tools">
                 <button type="button" className="secondary-button" onClick={selectPdfTasks}>
-                  Select PDFs
+                  选择 PDF
                 </button>
                 <button
                   type="button"
@@ -981,46 +995,46 @@ function App() {
                   onClick={clearTaskSelection}
                   disabled={selectedTasks.length === 0}
                 >
-                  Clear selection
+                  清除选择
                 </button>
               </div>
             </div>
 
             <div className="pdf-tools-status">
               <strong>
-                {selectedTasks.length} selected · {selectedRealLocalPdfTasks.length} usable local PDFs
+                {selectedTasks.length} 个已选 · {selectedRealLocalPdfTasks.length} 个可用本地 PDF
               </strong>
               <span>{pdfToolsGuidance()}</span>
             </div>
 
             <div className="pdf-tool-grid">
               <article className="pdf-tool-card">
-                <h3>Merge selected PDFs</h3>
-                <p>Requires 2 or more selected PDFs with real local paths.</p>
+                <h3>合并所选 PDF</h3>
+                <p>需要选择 2 个或更多带真实本地路径的 PDF。</p>
                 <button
                   type="button"
                   onClick={() => void mergePdfTasks()}
                   disabled={!canMergeSelectedPdfs}
                 >
-                  Merge selected PDFs
+                  合并所选 PDF
                 </button>
               </article>
 
               <article className="pdf-tool-card">
-                <h3>Split selected PDF</h3>
-                <p>Requires exactly 1 selected PDF with a real local path.</p>
+                <h3>拆分所选 PDF</h3>
+                <p>需要正好选择 1 个带真实本地路径的 PDF。</p>
                 <button
                   type="button"
                   onClick={() => selectedSinglePdfTask && void splitPdfTask(selectedSinglePdfTask)}
                   disabled={!canRunSelectedSinglePdfTool}
                 >
-                  Split selected PDF
+                  拆分所选 PDF
                 </button>
               </article>
 
               <article className="pdf-tool-card">
-                <h3>Rotate selected PDF</h3>
-                <p>Requires exactly 1 selected PDF. Choose left, right, or 180.</p>
+                <h3>旋转所选 PDF</h3>
+                <p>需要正好选择 1 个 PDF。选择左转、右转或 180 度。</p>
                 <div className="segmented-actions">
                   <button
                     type="button"
@@ -1029,7 +1043,7 @@ function App() {
                     }
                     disabled={!canRunSelectedSinglePdfTool}
                   >
-                    Left 90
+                    左转 90°
                   </button>
                   <button
                     type="button"
@@ -1038,7 +1052,7 @@ function App() {
                     }
                     disabled={!canRunSelectedSinglePdfTool}
                   >
-                    Right 90
+                    右转 90°
                   </button>
                   <button
                     type="button"
@@ -1053,11 +1067,11 @@ function App() {
               </article>
 
               <article className="pdf-tool-card">
-                <h3>Extract pages from selected PDF</h3>
-                <p>Requires exactly 1 selected PDF and a page range.</p>
+                <h3>提取所选 PDF 页面</h3>
+                <p>需要正好选择 1 个 PDF，并填写页码范围。</p>
                 <div className="extract-panel-control">
                   <input
-                    aria-label="Pages to extract from selected PDF"
+                    aria-label="要提取的页面范围"
                     className="page-range-input"
                     placeholder="1,3,5-7"
                     value={extractPageRange}
@@ -1070,40 +1084,40 @@ function App() {
                     }
                     disabled={!canExtractSelectedPages}
                   >
-                    Extract pages
+                    提取页面
                   </button>
                 </div>
               </article>
             </div>
           </section>
 
-          <section className="queue-panel" aria-label="Task queue">
+          <section className="queue-panel" aria-label="任务队列">
             <div className="queue-heading">
               <div>
-                <h2>Task queue</h2>
+                <h2>任务队列</h2>
                 <span>
-                  {tasks.length} total · {realLocalPdfTasks.length} local PDFs · {selectedTasks.length} selected
+                  {tasks.length} 个任务 · {realLocalPdfTasks.length} 个本地 PDF · {selectedTasks.length} 个已选
                 </span>
               </div>
             </div>
 
             {tasks.length === 0 ? (
               <div className="empty-state">
-                <h3>No tasks yet</h3>
-                <p>Add files to create waiting tasks.</p>
+                <h3>暂无任务</h3>
+                <p>添加文件后会创建等待任务。</p>
               </div>
             ) : (
-              <div className="task-table" role="table" aria-label="Local tasks">
+              <div className="task-table" role="table" aria-label="本地任务">
                 <div className="task-table-head" role="row">
-                  <span>Select</span>
-                  <span>File</span>
-                  <span>Status</span>
-                  <span>Output preview</span>
-                  <span>Actions</span>
+                  <span>选择</span>
+                  <span>文件</span>
+                  <span>状态</span>
+                  <span>输出预览</span>
+                  <span>操作</span>
                 </div>
                 {tasks.map((task) => (
                   <article className="task-row" role="row" key={task.id}>
-                    <label className="select-cell" aria-label={`Select ${task.displayName}`}>
+                    <label className="select-cell" aria-label={`选择 ${task.displayName}`}>
                       <input
                         type="checkbox"
                         checked={selectedTaskIds.has(task.id)}
@@ -1124,7 +1138,7 @@ function App() {
                       <small className={task.sourcePath ? "" : "path-warning"}>
                         {task.sourcePath
                           ? task.sourcePreview
-                          : `${task.sourcePreview} · display metadata only`}
+                          : `${task.sourcePreview} · 仅显示元数据`}
                       </small>
                     </div>
                     <div className="task-actions">
@@ -1137,7 +1151,7 @@ function App() {
                           task.status === "cancelled"
                         }
                       >
-                        Cancel
+                        取消
                       </button>
                       <button
                         type="button"
@@ -1145,14 +1159,14 @@ function App() {
                         onClick={() => retryTask(task.id)}
                         disabled={task.status !== "failed"}
                       >
-                        Retry
+                        重试
                       </button>
                       <button
                         type="button"
                         className="small-button ghost-button"
                         onClick={() => removeTask(task.id)}
                       >
-                        Remove
+                        移除
                       </button>
                     </div>
                   </article>
@@ -1162,55 +1176,56 @@ function App() {
           </section>
         </section>
 
-        <aside className="inspector" aria-label="Inspector">
+        <aside className="inspector" aria-label="检查器">
           <section className="inspector-card">
-            <h2>About</h2>
+            <h2>关于</h2>
             <p>
-              <strong>Created by 田宸宇</strong>
+              <strong>by 田宸宇</strong>
             </p>
-            <p className="about-slogan">让可能，发生在这儿。</p>
-            <p>Local-only file conversion tool.</p>
+            <p className="about-slogan">让可能发生在这儿。</p>
+            <p>纯本地文件转换工具。</p>
           </section>
 
           <section className="inspector-card">
-            <h2>Output rule</h2>
-            <p>Use a converted folder next to the source file.</p>
+            <h2>输出规则</h2>
+            <p>默认输出到源文件旁边的 converted 文件夹。</p>
             <pre>{outputNameExample.join("\n")}</pre>
           </section>
 
           <section className="inspector-card">
-            <h2>Engine status</h2>
+            <h2>引擎状态</h2>
             <p>
               {startupError
-                ? `Startup initialization reported an issue: ${startupError}`
+                ? `启动初始化报告问题：${startupError}`
                 : qpdfAvailable
-                  ? "PDF merge, split, page extraction, and rotate are enabled locally with bundled qpdf. Other conversions remain disabled."
-                  : "Conversion engines are not bundled yet."}
+                  ? "PDF 合并、拆分、页面提取和旋转已通过内置 qpdf 在本地启用。其他转换仍未启用。"
+                  : "转换引擎尚未内置。"}
             </p>
             <dl className="engine-list">
               {selfCheck.engines.map((engine) => (
                 <div className="engine-row" key={engine.name}>
                   <dt>{engine.name}</dt>
-                  <dd>{engine.message}</dd>
+                  <dd>{formatEngineMessage(engine)}</dd>
                 </div>
               ))}
             </dl>
           </section>
 
           <section className="inspector-card">
-            <h2>Error log</h2>
+            <h2>错误日志</h2>
             <pre className="log-box">
               {inspectorErrorLog ||
-                "No error log. Failed PDF merge, split, page extraction, rotate, or demo tasks appear here."}
+                "暂无错误日志。PDF 合并、拆分、页面提取、旋转或演示任务失败时会显示在这里。"}
             </pre>
           </section>
 
           <section className="inspector-card">
-            <h2>Local privacy</h2>
+            <h2>本地隐私</h2>
             <ul>
-              <li>No upload.</li>
-              <li>PDF merge, split, page extraction, and rotate run with bundled local qpdf only.</li>
-              <li>Other conversion operations remain disabled.</li>
+              <li>不上传。</li>
+              <li>不会修改原文件。</li>
+              <li>PDF 合并、拆分、页面提取和旋转仅使用内置本地 qpdf。</li>
+              <li>其他转换操作仍未启用。</li>
             </ul>
           </section>
         </aside>
