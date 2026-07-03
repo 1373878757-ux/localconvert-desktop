@@ -9,6 +9,7 @@ use std::{
 };
 use tauri::Manager;
 
+mod image_ops;
 mod qpdf;
 
 const DEFAULT_OUTPUT_STRATEGY: &str = "converted-folder-next-to-source";
@@ -327,6 +328,10 @@ pub fn run() {
             engine_self_check,
             startup_status,
             plan_output_path,
+            image_ops::plan_image_convert,
+            image_ops::plan_image_compress,
+            image_ops::plan_image_resize,
+            image_ops::plan_image_remove_metadata,
             qpdf::qpdf_merge_pdfs,
             qpdf::qpdf_split_pdf,
             qpdf::qpdf_extract_pages,

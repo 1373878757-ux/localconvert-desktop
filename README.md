@@ -55,6 +55,8 @@ The v1 scope should prioritize these conversion groups:
 
 Format support should be expanded only when the local engine path, output validation, and packaging story are reliable.
 
+Preview 0.2 image work is currently a planning boundary only. The app may define backend request validation and output-path planning for future JPG/JPEG, PNG, WebP, AVIF, TIFF/TIF, and HEIC input support, plus image compression, resizing, and EXIF removal. Real image conversion remains disabled until a local image engine is bundled and verified. HEIC is planned as input only until engine support is confirmed.
+
 ## Platform Matrix
 
 LocalConvert Desktop should support a full desktop platform matrix at the architecture level, but v1 delivery only enables platforms whose bundled engine assets are available and verified.
@@ -219,7 +221,7 @@ Office rendering can differ from the source application's native output. The v1 
 
 ## Development Setup
 
-This repository includes a minimal Tauri v2, React, and TypeScript app scaffold for LocalConvert Desktop. The current implementation includes a Simplified Chinese app UI, branded startup splash screen, file-intake and task-queue UI, backend output path planning, the bundled macOS Apple Silicon qpdf sidecar, startup qpdf engine self-check, and real local PDF merge, split, page extraction, and rotate execution only. Office conversion, PDFium rasterization, and image conversion remain disabled until intentionally enabled in later implementation steps.
+This repository includes a minimal Tauri v2, React, and TypeScript app scaffold for LocalConvert Desktop. The current implementation includes a Simplified Chinese app UI, branded startup splash screen, file-intake and task-queue UI, backend output path planning, the bundled macOS Apple Silicon qpdf sidecar, startup qpdf engine self-check, real local PDF merge, split, page extraction, and rotate execution, plus a planning-only backend boundary and disabled UI panel for future Preview 0.2 image tools. Office conversion, PDFium rasterization, and real image conversion remain disabled until intentionally enabled in later implementation steps.
 
 Development machines need the normal Tauri v2 toolchain requirements for the target platform, including Node.js, npm, Rust, Cargo, and platform-specific build dependencies.
 

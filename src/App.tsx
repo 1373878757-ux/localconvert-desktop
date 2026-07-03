@@ -1091,6 +1091,59 @@ function App() {
             </div>
           </section>
 
+          <section className="image-tools-panel" aria-label="Preview 0.2 图片工具规划">
+            <div className="pdf-tools-header">
+              <div>
+                <p className="section-kicker">Preview 0.2</p>
+                <h2>图片工具规划</h2>
+                <p>图片转换引擎尚未内置，当前版本仅启用 PDF 工具。</p>
+              </div>
+            </div>
+
+            <div className="image-format-list" aria-label="计划支持的图片格式">
+              <span>JPG</span>
+              <span>PNG</span>
+              <span>WebP</span>
+              <span>AVIF</span>
+              <span>TIFF</span>
+              <span className="planned-later">HEIC 稍后</span>
+            </div>
+
+            <div className="pdf-tool-grid image-tool-grid">
+              <article className="pdf-tool-card image-tool-card">
+                <h3>图片格式转换</h3>
+                <p>计划支持 JPG、PNG、WebP、AVIF 和 TIFF 输出。</p>
+                <button type="button" disabled>
+                  引擎尚未内置
+                </button>
+              </article>
+
+              <article className="pdf-tool-card image-tool-card">
+                <h3>图片压缩</h3>
+                <p>计划提供高清、平衡、小体积等本地压缩预设。</p>
+                <button type="button" disabled>
+                  引擎尚未内置
+                </button>
+              </article>
+
+              <article className="pdf-tool-card image-tool-card">
+                <h3>图片改尺寸</h3>
+                <p>计划支持按宽度、高度或等比规则批量调整尺寸。</p>
+                <button type="button" disabled>
+                  引擎尚未内置
+                </button>
+              </article>
+
+              <article className="pdf-tool-card image-tool-card">
+                <h3>移除图片元数据</h3>
+                <p>计划在本机移除 EXIF 等图片元数据，不上传文件。</p>
+                <button type="button" disabled>
+                  引擎尚未内置
+                </button>
+              </article>
+            </div>
+          </section>
+
           <section className="queue-panel" aria-label="任务队列">
             <div className="queue-heading">
               <div>
