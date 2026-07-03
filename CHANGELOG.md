@@ -1,5 +1,26 @@
 # Changelog
 
+## Preview 0.1.1 - qpdf macOS Apple Silicon Chinese UI
+
+LocalConvert Desktop by 田宸宇.
+
+Slogan: 让可能发生在这儿。
+
+Preview 0.1.1 tags the current stable Simplified Chinese UI build. It keeps the existing qpdf-backed PDF tools unchanged and focuses on Chinese user-facing copy for the local desktop utility experience.
+
+### Changed
+
+- Localized the visible app interface to Simplified Chinese.
+- Kept the branded startup splash screen with creator attribution.
+- Kept the splash slogan as `让可能发生在这儿。`.
+- Kept the startup splash minimum display time at 1800ms.
+- Kept qpdf PDF merge, split, rotate, and page extraction behavior unchanged.
+
+### Unchanged
+
+- qpdf remains the only bundled engine.
+- No Office conversion, image conversion, PDF preview, cloud upload, server-side conversion, telemetry, or new conversion category is added in this preview.
+
 ## Preview 0.1 - qpdf macOS Apple Silicon
 
 LocalConvert Desktop by 田宸宇.
