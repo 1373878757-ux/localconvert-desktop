@@ -386,6 +386,10 @@ function App() {
       return "qpdf 可用，内置引擎自检已通过。";
     }
 
+    if (engine.name === "image-engine" && engine.status === "available") {
+      return "image-engine 已检测到，但版本自检和图片转换执行尚未启用。";
+    }
+
     if (engine.status === "error") {
       return `本地检查失败：${engine.message}`;
     }

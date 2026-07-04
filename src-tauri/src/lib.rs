@@ -110,6 +110,7 @@ fn startup_status(startup_state: tauri::State<'_, StartupState>) -> StartupStatu
 fn build_engine_self_check() -> EngineSelfCheck {
     let platform = current_platform_key();
     let qpdf_status = qpdf::detect_qpdf_engine(&platform);
+    let image_engine_status = image_ops::detect_image_engine(&platform);
 
     EngineSelfCheck {
         platform,
@@ -136,9 +137,9 @@ fn build_engine_self_check() -> EngineSelfCheck {
             },
             EngineStatus {
                 name: "image-engine",
-                status: "not-installed",
+                status: image_engine_status.status,
                 required_for_v1: true,
-                message: "Not bundled yet.".to_string(),
+                message: image_engine_status.message,
             },
         ],
     }
@@ -493,5 +494,26 @@ mod tests {
 
         assert_eq!(plan.target_extension, "pdf");
         assert_eq!(plan.planned_output_filename, "report.pdf");
+    }
+
+    #[test]
+    fn engine_self_check_keeps_qpdf_status_dynamic_when_image_detection_runs() {
+        let self_check = build_engine_self_check();
+        let qpdf_engine = self_check
+            .engines
+            .iter()
+            .find(|engine| engine.name == "qpdf")
+            .expect("qpdf engine status should be present");
+        let expected_qpdf_status = qpdf::detect_qpdf_engine(&self_check.platform);
+
+        assert_eq!(qpdf_engine.status, expected_qpdf_status.status);
+        assert_eq!(qpdf_engine.message, expected_qpdf_status.message);
+
+        let image_engine = self_check
+            .engines
+            .iter()
+            .find(|engine| engine.name == "image-engine")
+            .expect("image-engine status should be present");
+        assert_eq!(image_engine.required_for_v1, true);
     }
 }

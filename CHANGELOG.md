@@ -5,12 +5,13 @@
 ### Added
 
 - Added a backend planning boundary for future Preview 0.2 image tools.
+- Added a backend detection boundary for a future bundled image-engine sidecar.
 - Added a disabled Simplified Chinese Image Tools panel that explains image conversion is not enabled yet.
 
 ### Unchanged
 
 - No real image conversion is enabled yet.
-- No image engine, LibreOffice, PDFium, fonts, upload, cloud, server-side conversion, or telemetry is added.
+- No image engine binary, LibreOffice, PDFium, fonts, upload, cloud, server-side conversion, or telemetry is added.
 - Existing qpdf PDF merge, split, rotate, and page extraction behavior is unchanged.
 
 ## Preview 0.1.1 - qpdf macOS Apple Silicon Chinese UI
