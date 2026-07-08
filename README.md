@@ -55,7 +55,7 @@ The v1 scope should prioritize these conversion groups:
 
 Format support should be expanded only when the local engine path, output validation, and packaging story are reliable.
 
-Preview 0.2 image work is currently a planning and detection boundary only. The app may define backend request validation, output-path planning, and future sidecar detection for JPG/JPEG, PNG, WebP, AVIF, TIFF/TIF, and HEIC input support, plus image compression, resizing, and EXIF removal. Real image conversion remains disabled until a local image engine is bundled and verified. HEIC is planned as input only until engine support is confirmed.
+Preview 0.2 image work is currently a planning and smoke-detection boundary only. The app may define backend request validation, output-path planning, and sidecar detection for JPG/JPEG, PNG, WebP, AVIF, TIFF/TIF, and HEIC input support, plus image compression, resizing, and EXIF removal. A first-party Rust `image-engine` sidecar exists for macOS Apple Silicon version and self-check validation only. Real image conversion remains disabled until a conversion-capable local image engine pipeline is intentionally enabled. HEIC is planned as input only until engine support is confirmed.
 
 ## Platform Matrix
 
@@ -221,7 +221,7 @@ Office rendering can differ from the source application's native output. The v1 
 
 ## Development Setup
 
-This repository includes a minimal Tauri v2, React, and TypeScript app scaffold for LocalConvert Desktop. The current implementation includes a Simplified Chinese app UI, branded startup splash screen, file-intake and task-queue UI, backend output path planning, the bundled macOS Apple Silicon qpdf sidecar, startup qpdf engine self-check, real local PDF merge, split, page extraction, and rotate execution, plus planning and detection-only backend boundaries and a disabled UI panel for future Preview 0.2 image tools. Office conversion, PDFium rasterization, and real image conversion remain disabled until intentionally enabled in later implementation steps.
+This repository includes a minimal Tauri v2, React, and TypeScript app scaffold for LocalConvert Desktop. The current implementation includes a Simplified Chinese app UI, branded startup splash screen, file-intake and task-queue UI, backend output path planning, the bundled macOS Apple Silicon qpdf sidecar, startup qpdf engine self-check, real local PDF merge, split, page extraction, and rotate execution, plus planning-only backend commands, a smoke-only first-party Rust `image-engine` sidecar, and a disabled UI panel for future Preview 0.2 image tools. Office conversion, PDFium rasterization, and real image conversion remain disabled until intentionally enabled in later implementation steps.
 
 Development machines need the normal Tauri v2 toolchain requirements for the target platform, including Node.js, npm, Rust, Cargo, and platform-specific build dependencies.
 

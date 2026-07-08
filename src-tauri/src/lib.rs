@@ -9,6 +9,7 @@ use std::{
 };
 use tauri::Manager;
 
+mod image_engine;
 mod image_ops;
 mod qpdf;
 
@@ -110,7 +111,7 @@ fn startup_status(startup_state: tauri::State<'_, StartupState>) -> StartupStatu
 fn build_engine_self_check() -> EngineSelfCheck {
     let platform = current_platform_key();
     let qpdf_status = qpdf::detect_qpdf_engine(&platform);
-    let image_engine_status = image_ops::detect_image_engine(&platform);
+    let image_engine_status = image_engine::detect_image_engine(&platform);
 
     EngineSelfCheck {
         platform,

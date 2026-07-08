@@ -5,6 +5,7 @@ description = "Pure local desktop file conversion app shell."
 authors = ["LocalConvert Desktop"]
 edition = "2021"
 rust-version = "1.77"
+default-run = "localconvert-desktop"
 
 [lib]
 name = "localconvert_desktop_lib"

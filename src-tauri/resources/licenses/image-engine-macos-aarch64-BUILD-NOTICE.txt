@@ -1,0 +1,17 @@
+LocalConvert Desktop image-engine sidecar notice
+
+Engine: image-engine
+Version: 0.2.0-preview.0
+Platform: macos-aarch64
+License: First-party LocalConvert Desktop sidecar
+
+Source:
+src-tauri/src/bin/image-engine.rs
+
+Local sidecar artifact:
+src-tauri/binaries/macos-aarch64/image-engine
+
+Build notes:
+This image-engine command-line sidecar is first-party Rust code for LocalConvert Desktop.
+This preview binary enables sidecar detection and smoke checking only.
+It supports --version and --self-check. It does not perform image conversion yet.

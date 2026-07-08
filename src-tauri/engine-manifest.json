@@ -102,6 +102,16 @@
       "sha256": "4d32d1ea36dfaec46ea1dda4d57bd4ffe2c2af8c6f9268167d313bbdfa98a790",
       "license": "Apache-2.0; see src-tauri/resources/licenses/qpdf-12.3.2-LICENSE.txt, src-tauri/resources/licenses/qpdf-12.3.2-NOTICE.md, and src-tauri/resources/licenses/qpdf-macos-aarch64-BUILD-NOTICE.txt",
       "destination": "src-tauri/binaries/macos-aarch64/qpdf"
+    },
+    {
+      "name": "image-engine",
+      "version": "0.2.0-preview.0",
+      "platform": "macos-aarch64",
+      "type": "sidecar",
+      "source": "first-party Rust source: src-tauri/src/bin/image-engine.rs",
+      "sha256": "4481fc1e37460e7e53eb417188026f7b3497291c99b29640cdbe836c852f130b",
+      "license": "First-party LocalConvert Desktop sidecar; see src-tauri/resources/licenses/image-engine-macos-aarch64-BUILD-NOTICE.txt",
+      "destination": "src-tauri/binaries/macos-aarch64/image-engine"
     }
   ]
 }

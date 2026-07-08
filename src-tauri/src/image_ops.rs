@@ -5,23 +5,14 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
-
 const DEFAULT_OUTPUT_STRATEGY: &str = "converted-folder-next-to-source";
 const COLLISION_STRATEGY_EXPLANATION: &str =
     "Creates a converted folder next to the source file and appends (1), (2), ... when a filename already exists.";
 const IMAGE_ENGINE_STATUS: &str = "not-bundled";
 const IMAGE_ENGINE_MESSAGE: &str = "Image engine is not bundled yet.";
-const IMAGE_ENGINE_MISSING_MESSAGE: &str = "Not bundled yet.";
 const INPUT_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp", "avif", "tiff", "tif", "heic"];
 const OUTPUT_FORMATS: &[&str] = &["jpg", "jpeg", "png", "webp", "avif", "tiff"];
 const COMPRESSION_PRESETS: &[&str] = &["high-quality", "balanced", "small-size"];
-
-pub struct ImageEngineDetection {
-    pub status: &'static str,
-    pub message: String,
-}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -115,59 +106,6 @@ pub fn plan_image_remove_metadata(
     let target_format =
         target_format_or_source_default(&request.source, request.output_format.as_deref())?;
     plan_image_operation("remove-metadata", &request.source, &target_format)
-}
-
-pub fn detect_image_engine(platform: &str) -> ImageEngineDetection {
-    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let runtime_dir = std::env::current_exe()
-        .ok()
-        .and_then(|executable_path| executable_path.parent().map(Path::to_path_buf));
-    let candidates = image_engine_candidate_paths(platform, manifest_dir, runtime_dir.as_deref());
-
-    detect_image_engine_from_candidates(platform, &candidates)
-}
-
-fn detect_image_engine_from_candidates(
-    platform: &str,
-    candidates: &[PathBuf],
-) -> ImageEngineDetection {
-    let Some(candidate) = candidates.iter().find(|path| path.exists()) else {
-        return ImageEngineDetection {
-            status: "not-installed",
-            message: IMAGE_ENGINE_MISSING_MESSAGE.to_string(),
-        };
-    };
-
-    let candidate_display = path_to_string(candidate);
-    let Ok(metadata) = fs::metadata(candidate) else {
-        return ImageEngineDetection {
-            status: "error",
-            message: format!(
-                "image-engine sidecar exists but could not be inspected: {candidate_display}"
-            ),
-        };
-    };
-
-    if !metadata.is_file() {
-        return ImageEngineDetection {
-            status: "error",
-            message: format!("image-engine sidecar path is not a file: {candidate_display}"),
-        };
-    }
-
-    if requires_executable_permission(platform) && !is_executable(&metadata) {
-        return ImageEngineDetection {
-            status: "error",
-            message: format!("image-engine sidecar is not executable: {candidate_display}"),
-        };
-    }
-
-    ImageEngineDetection {
-        status: "available",
-        message: format!(
-            "image-engine sidecar detected; version check is not enabled yet: {candidate_display}"
-        ),
-    }
 }
 
 fn plan_image_operation(
@@ -400,73 +338,6 @@ fn path_to_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
-fn image_engine_candidate_paths(
-    platform: &str,
-    src_tauri_dir: &Path,
-    runtime_dir: Option<&Path>,
-) -> Vec<PathBuf> {
-    let mut paths = vec![
-        src_tauri_dir
-            .join("binaries")
-            .join(platform)
-            .join(image_engine_raw_filename(platform)),
-        src_tauri_dir
-            .join("binaries")
-            .join(platform)
-            .join(image_engine_prepared_filename(platform)),
-    ];
-
-    if let Some(runtime_dir) = runtime_dir {
-        paths.push(runtime_dir.join(image_engine_prepared_filename(platform)));
-        paths.push(runtime_dir.join(image_engine_raw_filename(platform)));
-    }
-
-    paths
-}
-
-fn image_engine_raw_filename(platform: &str) -> String {
-    if platform.starts_with("windows-") {
-        "image-engine.exe".to_string()
-    } else {
-        "image-engine".to_string()
-    }
-}
-
-fn image_engine_prepared_filename(platform: &str) -> String {
-    let extension = if platform.starts_with("windows-") {
-        ".exe"
-    } else {
-        ""
-    };
-
-    format!("image-engine-{}{}", target_triple(platform), extension)
-}
-
-fn target_triple(platform: &str) -> &'static str {
-    match platform {
-        "windows-x86_64" => "x86_64-pc-windows-msvc",
-        "windows-aarch64" => "aarch64-pc-windows-msvc",
-        "macos-aarch64" => "aarch64-apple-darwin",
-        "macos-x86_64" => "x86_64-apple-darwin",
-        "linux-x86_64" => "x86_64-unknown-linux-gnu",
-        _ => "unknown",
-    }
-}
-
-fn requires_executable_permission(platform: &str) -> bool {
-    platform.starts_with("macos-") || platform.starts_with("linux-")
-}
-
-#[cfg(unix)]
-fn is_executable(metadata: &fs::Metadata) -> bool {
-    metadata.permissions().mode() & 0o111 != 0
-}
-
-#[cfg(not(unix))]
-fn is_executable(_metadata: &fs::Metadata) -> bool {
-    true
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -584,107 +455,6 @@ mod tests {
             plan.planned_output_path,
             path_to_string(&converted_dir.join("report (2).webp"))
         );
-
-        let _ = fs::remove_dir_all(case_dir);
-    }
-
-    #[test]
-    fn resolves_image_engine_sidecar_paths() {
-        let base = Path::new("/workspace/src-tauri");
-        let paths =
-            image_engine_candidate_paths("macos-aarch64", base, Some(Path::new("/app/runtime")));
-
-        assert_eq!(
-            paths[0],
-            base.join("binaries")
-                .join("macos-aarch64")
-                .join("image-engine")
-        );
-        assert_eq!(
-            paths[1],
-            base.join("binaries")
-                .join("macos-aarch64")
-                .join("image-engine-aarch64-apple-darwin")
-        );
-        assert_eq!(
-            paths[2],
-            Path::new("/app/runtime").join("image-engine-aarch64-apple-darwin")
-        );
-        assert_eq!(paths[3], Path::new("/app/runtime").join("image-engine"));
-
-        assert_eq!(
-            image_engine_raw_filename("windows-x86_64"),
-            "image-engine.exe"
-        );
-        assert_eq!(
-            image_engine_prepared_filename("windows-x86_64"),
-            "image-engine-x86_64-pc-windows-msvc.exe"
-        );
-    }
-
-    #[test]
-    fn missing_image_engine_returns_not_installed() {
-        let missing = temp_case_dir("missing-engine").join("image-engine");
-        let detection = detect_image_engine_from_candidates("macos-aarch64", &[missing]);
-
-        assert_eq!(detection.status, "not-installed");
-        assert_eq!(detection.message, IMAGE_ENGINE_MISSING_MESSAGE);
-    }
-
-    #[test]
-    fn image_engine_directory_path_returns_error() {
-        let case_dir = temp_case_dir("directory-engine");
-        fs::create_dir_all(&case_dir).expect("directory fixture should be created");
-        let detection = detect_image_engine_from_candidates("macos-aarch64", &[case_dir.clone()]);
-
-        assert_eq!(detection.status, "error");
-        assert!(detection.message.contains("path is not a file"));
-
-        let _ = fs::remove_dir_all(case_dir);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn non_executable_image_engine_returns_error_on_unix() {
-        let case_dir = temp_case_dir("non-executable-engine");
-        let fixture = case_dir.join("image-engine");
-        fs::create_dir_all(fixture.parent().expect("fixture should have a parent"))
-            .expect("fixture parent should be created");
-        File::create(&fixture).expect("fixture file should be created");
-        let mut permissions = fs::metadata(&fixture)
-            .expect("fixture metadata should be available")
-            .permissions();
-        permissions.set_mode(0o644);
-        fs::set_permissions(&fixture, permissions).expect("fixture permissions should be set");
-
-        let detection = detect_image_engine_from_candidates("macos-aarch64", &[fixture.clone()]);
-
-        assert_eq!(detection.status, "error");
-        assert!(detection.message.contains("not executable"));
-
-        let _ = fs::remove_dir_all(case_dir);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn executable_image_engine_fixture_returns_available_without_smoke_check() {
-        let case_dir = temp_case_dir("executable-engine");
-        let fixture = case_dir.join("image-engine");
-        fs::create_dir_all(fixture.parent().expect("fixture should have a parent"))
-            .expect("fixture parent should be created");
-        File::create(&fixture).expect("fixture file should be created");
-        let mut permissions = fs::metadata(&fixture)
-            .expect("fixture metadata should be available")
-            .permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&fixture, permissions).expect("fixture permissions should be set");
-
-        let detection = detect_image_engine_from_candidates("macos-aarch64", &[fixture.clone()]);
-
-        assert_eq!(detection.status, "available");
-        assert!(detection
-            .message
-            .contains("version check is not enabled yet"));
 
         let _ = fs::remove_dir_all(case_dir);
     }

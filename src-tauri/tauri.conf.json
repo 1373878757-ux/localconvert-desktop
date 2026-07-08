@@ -54,6 +54,9 @@
       "icons/icon.ico",
       "icons/icon.png"
     ],
-    "externalBin": ["binaries/macos-aarch64/qpdf"]
+    "externalBin": [
+      "binaries/macos-aarch64/qpdf",
+      "binaries/macos-aarch64/image-engine"
+    ]
   }
 }
