@@ -65,12 +65,12 @@ pub struct ImageOperationPlan {
     message: &'static str,
 }
 
-struct PlannedImageOutput {
-    source_display_name: String,
-    source_extension: String,
-    planned_converted_folder_path: String,
-    planned_output_filename: String,
-    planned_output_path: String,
+pub(crate) struct PlannedImageOutput {
+    pub(crate) source_display_name: String,
+    pub(crate) source_extension: String,
+    pub(crate) planned_converted_folder_path: String,
+    pub(crate) planned_output_filename: String,
+    pub(crate) planned_output_path: String,
 }
 
 #[tauri::command]
@@ -130,7 +130,10 @@ fn plan_image_operation(
     })
 }
 
-fn plan_image_output(source: &str, target_format: &str) -> Result<PlannedImageOutput, String> {
+pub(crate) fn plan_image_output(
+    source: &str,
+    target_format: &str,
+) -> Result<PlannedImageOutput, String> {
     let trimmed_source = source.trim();
     if trimmed_source.is_empty() {
         return Err("Source image path is required.".to_string());

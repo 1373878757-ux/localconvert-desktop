@@ -9,6 +9,7 @@ use std::{
 };
 use tauri::Manager;
 
+mod image_convert;
 mod image_engine;
 mod image_ops;
 mod qpdf;
@@ -330,6 +331,7 @@ pub fn run() {
             engine_self_check,
             startup_status,
             plan_output_path,
+            image_convert::image_convert_file,
             image_ops::plan_image_convert,
             image_ops::plan_image_compress,
             image_ops::plan_image_resize,

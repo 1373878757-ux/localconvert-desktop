@@ -26,6 +26,68 @@ pub fn detect_image_engine(platform: &str) -> ImageEngineDetection {
     detect_image_engine_from_candidates(platform, &candidates, run_image_engine_smoke_check)
 }
 
+pub(crate) fn resolve_image_engine_sidecar_path(platform: &str) -> Result<PathBuf, String> {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let runtime_dir = std::env::current_exe()
+        .ok()
+        .and_then(|executable_path| executable_path.parent().map(Path::to_path_buf));
+    let candidates = image_engine_candidate_paths(platform, manifest_dir, runtime_dir.as_deref());
+
+    for candidate in candidates {
+        if !candidate.exists() {
+            continue;
+        }
+
+        let detection = detect_image_engine_from_candidates(
+            platform,
+            &[candidate.clone()],
+            run_image_engine_smoke_check,
+        );
+        if detection.status == "available" {
+            return Ok(candidate);
+        }
+
+        return Err(detection.message);
+    }
+
+    Err("image-engine sidecar is not bundled for this platform.".to_string())
+}
+
+pub(crate) fn current_platform_key() -> &'static str {
+    let os = if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else if cfg!(target_os = "linux") {
+        "linux"
+    } else if cfg!(target_os = "android") {
+        "android"
+    } else if cfg!(target_os = "ios") {
+        "ios"
+    } else {
+        "unknown"
+    };
+
+    let arch = if cfg!(target_arch = "x86_64") {
+        "x86_64"
+    } else if cfg!(target_arch = "aarch64") {
+        "aarch64"
+    } else {
+        "unknown"
+    };
+
+    match (os, arch) {
+        ("windows", "x86_64") => "windows-x86_64",
+        ("windows", "aarch64") => "windows-aarch64",
+        ("macos", "aarch64") => "macos-aarch64",
+        ("macos", "x86_64") => "macos-x86_64",
+        ("linux", "x86_64") => "linux-x86_64",
+        ("android", "aarch64") => "android-aarch64",
+        ("ios", "aarch64") => "ios-aarch64",
+        _ => "unknown-unknown",
+    }
+}
+
 fn detect_image_engine_from_candidates<F>(
     platform: &str,
     candidates: &[PathBuf],
@@ -341,7 +403,7 @@ mod tests {
 
         let detection =
             detect_image_engine_from_candidates("macos-aarch64", &[fixture.clone()], |_| {
-                Ok("LocalConvert image-engine 0.2.0-preview.0".to_string())
+                Ok("LocalConvert image-engine 0.2.0-preview.1".to_string())
             });
 
         assert_eq!(detection.status, "available");
@@ -386,6 +448,6 @@ mod tests {
         let detection = detect_image_engine("macos-aarch64");
 
         assert_eq!(detection.status, "available");
-        assert!(detection.message.contains("0.2.0-preview.0"));
+        assert!(detection.message.contains("0.2.0-preview.1"));
     }
 }

@@ -76,7 +76,8 @@ export function formatBytes(size: number): string {
 export function createTaskFromFile(
   file: File,
   existingOutputNames: readonly string[],
-  now = Date.now()
+  now = Date.now(),
+  targetExtension = "pdf"
 ): LocalTask {
   const displayName = file.name || "未命名";
   const fileWithOptionalPath = file as File & {
@@ -84,7 +85,7 @@ export function createTaskFromFile(
     webkitRelativePath?: string;
   };
   const sourcePath = fileWithOptionalPath.path?.trim() || undefined;
-  const desiredOutputName = `${getBaseName(displayName)}.pdf`;
+  const desiredOutputName = `${getBaseName(displayName)}.${targetExtension}`;
   const outputName = getOutputName(desiredOutputName, existingOutputNames);
 
   return {

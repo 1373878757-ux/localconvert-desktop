@@ -55,7 +55,7 @@ The v1 scope should prioritize these conversion groups:
 
 Format support should be expanded only when the local engine path, output validation, and packaging story are reliable.
 
-Preview 0.2 image work is currently a planning and smoke-detection boundary only. The app may define backend request validation, output-path planning, and sidecar detection for JPG/JPEG, PNG, WebP, AVIF, TIFF/TIF, and HEIC input support, plus image compression, resizing, and EXIF removal. A first-party Rust `image-engine` sidecar exists for macOS Apple Silicon version and self-check validation only. Real image conversion remains disabled until a conversion-capable local image engine pipeline is intentionally enabled. HEIC is planned as input only until engine support is confirmed.
+Preview 0.2 image work begins with real local format conversion between JPG/JPEG, PNG, and WebP on macOS Apple Silicon. A first-party Rust `image-engine` sidecar performs the conversion locally and is enabled only after its startup version and self-check validation pass. The Rust backend validates requests, creates the source-adjacent `converted` folder at execution time, refuses overwrites, launches the sidecar with argument arrays, captures diagnostics, and validates the output before reporting success. AVIF, TIFF/TIF, and HEIC remain planning-only; image compression, resizing, metadata removal, and images-to-PDF are not enabled yet. HEIC remains planned as input only until engine support is confirmed.
 
 ## Platform Matrix
 
@@ -221,9 +221,9 @@ Office rendering can differ from the source application's native output. The v1 
 
 ## Development Setup
 
-This repository includes a minimal Tauri v2, React, and TypeScript app scaffold for LocalConvert Desktop. The current implementation includes a Simplified Chinese app UI, branded startup splash screen, file-intake and task-queue UI, backend output path planning, the bundled macOS Apple Silicon qpdf sidecar, startup qpdf engine self-check, real local PDF merge, split, page extraction, and rotate execution, plus planning-only backend commands, a smoke-only first-party Rust `image-engine` sidecar, and a disabled UI panel for future Preview 0.2 image tools. Office conversion, PDFium rasterization, and real image conversion remain disabled until intentionally enabled in later implementation steps.
+This repository includes a minimal Tauri v2, React, and TypeScript app scaffold for LocalConvert Desktop. The current implementation includes a Simplified Chinese app UI, branded startup splash screen, file-intake and task-queue UI, backend output path planning, the bundled macOS Apple Silicon qpdf sidecar, startup engine self-checks, real local PDF merge, split, page extraction, and rotate execution, and real local JPG/JPEG, PNG, and WebP conversion through the first-party Rust `image-engine` sidecar. AVIF, TIFF/TIF, HEIC, image compression, resizing, metadata removal, images-to-PDF, Office conversion, and PDFium rasterization remain disabled until intentionally enabled in later implementation steps.
 
-Development machines need the normal Tauri v2 toolchain requirements for the target platform, including Node.js, npm, Rust, Cargo, and platform-specific build dependencies.
+Development machines need the normal Tauri v2 toolchain requirements for the target platform, including Node.js, npm, Rust 1.85 or newer, Cargo, and platform-specific build dependencies. Rust 1.85 is required by the pinned image codec dependency used to build the first-party `image-engine` sidecar.
 
 Install dependencies:
 
@@ -283,7 +283,16 @@ Current qpdf PDF tools checklist:
 - Repeat at least one operation from a folder path containing spaces.
 - Repeat at least one operation when the planned output name already exists and confirm auto-incremented collision naming.
 - Hash or otherwise compare source files before and after each operation and confirm sources are unchanged.
-- Confirm Office, image, PDF rasterization, and preview tools remain disabled until their bundled engines are intentionally added.
+- Confirm Office, image compression/resizing/metadata tools, PDF rasterization, and preview tools remain disabled until their bundled engines or execution paths are intentionally added.
+
+Current image conversion checklist:
+
+- Convert PNG to JPG and confirm a non-empty output is written to the source-adjacent `converted` folder.
+- Convert JPG/JPEG to WebP and WebP to PNG.
+- Repeat a conversion with a Chinese filename and a path containing spaces.
+- Create an output collision and confirm the backend selects an incremented name instead of overwriting it.
+- Hash or otherwise compare the source image before and after conversion and confirm it is unchanged.
+- Confirm AVIF, TIFF/TIF, HEIC, compression, resizing, metadata removal, and images-to-PDF remain disabled.
 
 Office-to-PDF:
 

@@ -13,6 +13,7 @@ import {
   createTaskFromFile,
   formatBytes,
   getBaseName,
+  getExtension,
   getOutputName
 } from "./taskUtils";
 
@@ -100,6 +101,25 @@ type QpdfRotateResult = {
   message: string;
 };
 
+type ImageConvertResult = {
+  success: boolean;
+  operation: "convert";
+  sourcePath: string;
+  outputPath: string;
+  sourceFormat: string;
+  targetFormat: string;
+  outputBytes: number;
+  width: number;
+  height: number;
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+  timedOut: boolean;
+  message: string;
+};
+
+type EnabledImageFormat = "jpg" | "png" | "webp";
+
 const fallbackSelfCheck: EngineSelfCheck = {
   platform: "桌面预览",
   fullEdition: true,
@@ -132,14 +152,7 @@ const fallbackSelfCheck: EngineSelfCheck = {
   ]
 };
 
-const toolCategories = [
-  { label: "PDF 工具", enabled: true, note: "可用" },
-  { label: "批量队列", enabled: true, note: "本地" },
-  { label: "文档转 PDF", enabled: false, note: "稍后" },
-  { label: "图片转换", enabled: false, note: "稍后" },
-  { label: "图片压缩", enabled: false, note: "稍后" },
-  { label: "图片转 PDF", enabled: false, note: "稍后" }
-];
+const enabledImageExtensions = new Set(["jpg", "jpeg", "png", "webp"]);
 
 const statusLabels: Record<TaskStatus, string> = {
   waiting: "等待中",
@@ -163,6 +176,8 @@ function App() {
   const [folderMessage, setFolderMessage] = useState("");
   const [startupError, setStartupError] = useState("");
   const [extractPageRange, setExtractPageRange] = useState("");
+  const [imageTargetFormat, setImageTargetFormat] =
+    useState<EnabledImageFormat>("webp");
   const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(
     () => new Set()
   );
@@ -222,9 +237,27 @@ function App() {
     (startupError ? `启动初始化问题:\n${startupError}` : "");
   const qpdfEngine = selfCheck.engines.find((engine) => engine.name === "qpdf");
   const qpdfAvailable = qpdfEngine?.status === "available";
+  const imageEngine = selfCheck.engines.find(
+    (engine) => engine.name === "image-engine"
+  );
+  const imageEngineAvailable = imageEngine?.status === "available";
+  const toolCategories = [
+    { label: "PDF 工具", enabled: qpdfAvailable, note: qpdfAvailable ? "可用" : "不可用" },
+    { label: "图片转换", enabled: imageEngineAvailable, note: imageEngineAvailable ? "可用" : "不可用" },
+    { label: "批量队列", enabled: true, note: "本地" },
+    { label: "文档转 PDF", enabled: false, note: "稍后" },
+    { label: "图片压缩", enabled: false, note: "稍后" },
+    { label: "图片转 PDF", enabled: false, note: "稍后" }
+  ];
   const realLocalPdfTasks = tasks.filter(
     (task) =>
       task.extension === "pdf" &&
+      Boolean(task.sourcePath) &&
+      task.status !== "cancelled"
+  );
+  const realLocalImageTasks = tasks.filter(
+    (task) =>
+      enabledImageExtensions.has(task.extension) &&
       Boolean(task.sourcePath) &&
       task.status !== "cancelled"
   );
@@ -263,7 +296,37 @@ function App() {
   const canExtractSelectedPages =
     canRunSelectedSinglePdfTool && extractPageRange.trim().length > 0;
 
-  async function planBackendOutput(task: LocalTask) {
+  const selectedEnabledImageTasks = selectedTasks.filter((task) =>
+    enabledImageExtensions.has(task.extension)
+  );
+  const selectedUnsupportedImageTasks = selectedTasks.filter(
+    (task) => !enabledImageExtensions.has(task.extension)
+  );
+  const selectedImageTasksWithoutPath = selectedEnabledImageTasks.filter(
+    (task) => !task.sourcePath
+  );
+  const selectedCancelledImageTasks = selectedEnabledImageTasks.filter(
+    (task) => task.status === "cancelled"
+  );
+  const selectedConvertingImageTasks = selectedEnabledImageTasks.filter(
+    (task) => task.status === "converting"
+  );
+  const selectedSameFormatImageTasks = selectedEnabledImageTasks.filter(
+    (task) => canonicalImageFormat(task.extension) === imageTargetFormat
+  );
+  const selectedRealLocalImageTasks = selectedEnabledImageTasks.filter(
+    (task) => Boolean(task.sourcePath) && task.status !== "cancelled"
+  );
+  const canConvertSelectedImages =
+    imageEngineAvailable &&
+    selectedTasks.length > 0 &&
+    selectedUnsupportedImageTasks.length === 0 &&
+    selectedImageTasksWithoutPath.length === 0 &&
+    selectedCancelledImageTasks.length === 0 &&
+    selectedConvertingImageTasks.length === 0 &&
+    selectedSameFormatImageTasks.length === 0;
+
+  async function planBackendOutput(task: LocalTask, targetExtension = "pdf") {
     if (!task.sourcePath) {
       return;
     }
@@ -272,7 +335,7 @@ function App() {
       const plan = await invoke<OutputPathPlan>("plan_output_path", {
         request: {
           source: task.sourcePath,
-          targetExtension: "pdf",
+          targetExtension,
           outputStrategy: "converted-folder-next-to-source"
         }
       });
@@ -295,6 +358,16 @@ function App() {
   function outputNameFromPreview(outputPreview: string): string {
     const normalizedPreview = outputPreview.replaceAll("\\", "/");
     return normalizedPreview.split("/").pop() || outputPreview;
+  }
+
+  function canonicalImageFormat(extension: string): EnabledImageFormat | "" {
+    if (extension === "jpg" || extension === "jpeg") {
+      return "jpg";
+    }
+    if (extension === "png" || extension === "webp") {
+      return extension;
+    }
+    return "";
   }
 
   function buildSiblingPath(sourcePath: string, fileName: string): string {
@@ -377,6 +450,21 @@ function App() {
     ].join("\n");
   }
 
+  function formatImageConvertLog(result: ImageConvertResult) {
+    return [
+      `引擎消息: ${result.message}`,
+      `源文件: ${result.sourcePath || "不可用"}`,
+      `输出: ${result.outputPath || "未写入"}`,
+      `格式: ${result.sourceFormat || "未知"} → ${result.targetFormat || "未知"}`,
+      `尺寸: ${result.width > 0 && result.height > 0 ? `${result.width} × ${result.height}` : "未验证"}`,
+      `输出大小: ${result.outputBytes} 字节`,
+      `退出码: ${result.exitCode ?? "无"}`,
+      `是否超时: ${result.timedOut ? "是" : "否"}`,
+      result.stdout ? `stdout:\n${result.stdout}` : "stdout: <空>",
+      result.stderr ? `stderr:\n${result.stderr}` : "stderr: <空>"
+    ].join("\n");
+  }
+
   function formatEngineMessage(engine: EngineStatus) {
     if (engine.status === "not-installed") {
       return "尚未内置。";
@@ -387,7 +475,7 @@ function App() {
     }
 
     if (engine.name === "image-engine" && engine.status === "available") {
-      return "image-engine 已检测到，但版本自检和图片转换执行尚未启用。";
+      return "image-engine 可用，JPG、PNG、WebP 本地转换已通过自检。";
     }
 
     if (engine.status === "error") {
@@ -433,6 +521,16 @@ function App() {
     );
   }
 
+  function selectImageTasks() {
+    setSelectedTaskIds(
+      new Set(
+        tasks
+          .filter((task) => enabledImageExtensions.has(task.extension))
+          .map((task) => task.id)
+      )
+    );
+  }
+
   function clearTaskSelection() {
     setSelectedTaskIds(new Set());
   }
@@ -447,7 +545,7 @@ function App() {
     }
 
     if (selectedNonPdfTasks.length > 0) {
-      return "当前 qpdf 工具仅支持 PDF 任务。Office 和图片转换尚未启用。";
+      return "当前 qpdf 工具仅支持 PDF 任务。图片请使用图片转换面板。";
     }
 
     if (selectedPdfTasksWithoutPath.length > 0) {
@@ -465,6 +563,38 @@ function App() {
     return `已选择 ${selectedRealLocalPdfTasks.length} 个可用本地 PDF。合并需要 2 个或更多；拆分、旋转和提取需要正好 1 个。`;
   }
 
+  function imageToolsGuidance() {
+    if (!imageEngineAvailable) {
+      return "内置 image-engine 不可用。图片转换会保持禁用，直到本地引擎通过自检。";
+    }
+
+    if (selectedTasks.length === 0) {
+      return "请在任务队列中选择 JPG、JPEG、PNG 或 WebP 图片。";
+    }
+
+    if (selectedUnsupportedImageTasks.length > 0) {
+      return "所选任务中含有当前不支持的格式。图片转换仅启用 JPG/JPEG、PNG 和 WebP。";
+    }
+
+    if (selectedImageTasksWithoutPath.length > 0) {
+      return "部分所选图片只有显示元数据。真实转换需要桌面端提供本地文件路径。";
+    }
+
+    if (selectedCancelledImageTasks.length > 0) {
+      return "已取消的图片任务不能转换，请先重试或移除。";
+    }
+
+    if (selectedConvertingImageTasks.length > 0) {
+      return "所选图片中已有任务正在处理，请等待完成。";
+    }
+
+    if (selectedSameFormatImageTasks.length > 0) {
+      return `有 ${selectedSameFormatImageTasks.length} 张图片已经是 ${imageTargetFormat.toUpperCase()}，请选择不同的输出格式。`;
+    }
+
+    return `已选择 ${selectedRealLocalImageTasks.length} 张本地图片，将转换为 ${imageTargetFormat.toUpperCase()}。`;
+  }
+
   function addFiles(fileList: FileList | File[]) {
     const files = Array.from(fileList);
     if (files.length === 0) {
@@ -477,10 +607,14 @@ function App() {
     const createdTasks: LocalTask[] = [];
 
     for (const file of files) {
+      const extension = getExtension(file.name || "");
+      const targetExtension = enabledImageExtensions.has(extension)
+        ? imageTargetFormat
+        : "pdf";
       const task = createTaskFromFile(file, [
         ...outputNames,
         ...createdTasks.map((item) => outputNameFromPreview(item.outputPreview))
-      ]);
+      ], Date.now(), targetExtension);
       createdTasks.push(task);
     }
 
@@ -489,7 +623,48 @@ function App() {
     });
 
     for (const task of createdTasks) {
-      void planBackendOutput(task);
+      void planBackendOutput(
+        task,
+        enabledImageExtensions.has(task.extension) ? imageTargetFormat : "pdf"
+      );
+    }
+  }
+
+  function handleImageTargetChange(event: ChangeEvent<HTMLSelectElement>) {
+    const targetFormat = event.currentTarget.value as EnabledImageFormat;
+    setImageTargetFormat(targetFormat);
+
+    setTasks((currentTasks) => {
+      const reservedOutputNames = currentTasks
+        .filter((task) => !selectedTaskIds.has(task.id))
+        .map((task) => outputNameFromPreview(task.outputPreview));
+
+      return currentTasks.map((task) => {
+        if (
+          !selectedTaskIds.has(task.id) ||
+          !enabledImageExtensions.has(task.extension)
+        ) {
+          return task;
+        }
+
+        const outputName = getOutputName(
+          `${getBaseName(task.displayName)}.${targetFormat}`,
+          reservedOutputNames
+        );
+        reservedOutputNames.push(outputName);
+        return {
+          ...task,
+          outputPreview: task.sourcePath
+            ? task.outputPreview
+            : `converted/${outputName}`
+        };
+      });
+    });
+
+    for (const task of selectedEnabledImageTasks) {
+      if (task.sourcePath) {
+        void planBackendOutput(task, targetFormat);
+      }
     }
   }
 
@@ -864,6 +1039,93 @@ function App() {
     }
   }
 
+  async function convertSelectedImages() {
+    if (!canConvertSelectedImages) {
+      setFolderMessage(imageToolsGuidance());
+      return;
+    }
+
+    const conversionTasks = selectedRealLocalImageTasks;
+    const taskIds = new Set(conversionTasks.map((task) => task.id));
+    const targetFormat = imageTargetFormat;
+    setTasks((currentTasks) =>
+      currentTasks.map((task) =>
+        taskIds.has(task.id)
+          ? {
+              ...task,
+              status: "converting",
+              errorLog: ""
+            }
+          : task
+      )
+    );
+
+    let successCount = 0;
+    let failureCount = 0;
+    const outputPaths: string[] = [];
+
+    for (const task of conversionTasks) {
+      if (!task.sourcePath) {
+        failureCount += 1;
+        continue;
+      }
+
+      try {
+        const result = await invoke<ImageConvertResult>("image_convert_file", {
+          request: {
+            source: task.sourcePath,
+            targetFormat
+          }
+        });
+        const log = formatImageConvertLog(result);
+        if (result.success) {
+          successCount += 1;
+          outputPaths.push(result.outputPath);
+        } else {
+          failureCount += 1;
+        }
+
+        setTasks((currentTasks) =>
+          currentTasks.map((currentTask) =>
+            currentTask.id === task.id
+              ? {
+                  ...currentTask,
+                  status: result.success ? "completed" : "failed",
+                  outputPreview: result.outputPath || currentTask.outputPreview,
+                  errorLog: result.success ? "" : log
+                }
+              : currentTask
+          )
+        );
+      } catch (error) {
+        failureCount += 1;
+        const message =
+          error instanceof Error ? error.message : "图片转换失败。";
+        setTasks((currentTasks) =>
+          currentTasks.map((currentTask) =>
+            currentTask.id === task.id
+              ? {
+                  ...currentTask,
+                  status: "failed",
+                  errorLog: message
+                }
+              : currentTask
+          )
+        );
+      }
+    }
+
+    if (failureCount === 0) {
+      setFolderMessage(
+        `已在本机完成 ${successCount} 张图片转换。输出：${outputPaths.join(" | ")}`
+      );
+    } else {
+      setFolderMessage(
+        `图片转换完成：成功 ${successCount}，失败 ${failureCount}。请查看失败任务的错误日志。`
+      );
+    }
+  }
+
   return (
     <main className="app-shell">
       <header className="top-bar">
@@ -876,7 +1138,13 @@ function App() {
           <span>不上传</span>
           <span>本地队列</span>
           <span>
-            {qpdfAvailable ? "PDF qpdf 工具已启用" : "转换未启用"}
+            {qpdfAvailable && imageEngineAvailable
+              ? "PDF 与图片工具已启用"
+              : qpdfAvailable
+                ? "PDF qpdf 工具已启用"
+                : imageEngineAvailable
+                  ? "图片转换已启用"
+                  : "转换未启用"}
           </span>
         </div>
       </header>
@@ -904,8 +1172,8 @@ function App() {
             ))}
           </nav>
           <div className="sidebar-note">
-            <strong>PDF 工具预览</strong>
-            <span>当前仅启用 qpdf PDF 工具。Office 和图片工具仍未启用。</span>
+            <strong>本地工具预览</strong>
+            <span>PDF 工具与 JPG、PNG、WebP 图片转换已启用。Office 等其他能力仍未启用。</span>
           </div>
         </aside>
 
@@ -1095,54 +1363,99 @@ function App() {
             </div>
           </section>
 
-          <section className="image-tools-panel" aria-label="Preview 0.2 图片工具规划">
+          <section className="image-tools-panel" aria-label="Preview 0.2 图片转换">
             <div className="pdf-tools-header">
               <div>
                 <p className="section-kicker">Preview 0.2</p>
-                <h2>图片工具规划</h2>
-                <p>图片转换引擎尚未内置，当前版本仅启用 PDF 工具。</p>
+                <h2>图片格式转换</h2>
+                <p>
+                  {imageEngineAvailable
+                    ? "JPG、PNG、WebP 已启用，转换仅在本机执行。"
+                    : "图片引擎不可用，转换操作保持禁用。"}
+                </p>
+              </div>
+              <div className="selection-tools">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={selectImageTasks}
+                  disabled={tasks.every(
+                    (task) => !enabledImageExtensions.has(task.extension)
+                  )}
+                >
+                  选择全部图片
+                </button>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={clearTaskSelection}
+                  disabled={selectedTaskIds.size === 0}
+                >
+                  清除选择
+                </button>
               </div>
             </div>
 
-            <div className="image-format-list" aria-label="计划支持的图片格式">
-              <span>JPG</span>
-              <span>PNG</span>
-              <span>WebP</span>
-              <span>AVIF</span>
-              <span>TIFF</span>
+            <div className="pdf-tools-status">
+              <strong>{imageEngineAvailable ? "image-engine 可用" : "image-engine 不可用"}</strong>
+              <span>{imageToolsGuidance()}</span>
+            </div>
+
+            <div className="image-format-list" aria-label="图片格式状态">
+              <span className="format-enabled">JPG</span>
+              <span className="format-enabled">PNG</span>
+              <span className="format-enabled">WebP</span>
+              <span className="planned-later">AVIF 稍后</span>
+              <span className="planned-later">TIFF 稍后</span>
               <span className="planned-later">HEIC 稍后</span>
             </div>
 
             <div className="pdf-tool-grid image-tool-grid">
               <article className="pdf-tool-card image-tool-card">
                 <h3>图片格式转换</h3>
-                <p>计划支持 JPG、PNG、WebP、AVIF 和 TIFF 输出。</p>
-                <button type="button" disabled>
-                  引擎尚未内置
+                <p>选择任务和输出格式。结果写入源文件旁边的 converted 文件夹，不覆盖原文件。</p>
+                <label className="image-target-field">
+                  <span>输出格式</span>
+                  <select
+                    value={imageTargetFormat}
+                    onChange={handleImageTargetChange}
+                    aria-label="图片输出格式"
+                  >
+                    <option value="jpg">JPG</option>
+                    <option value="png">PNG</option>
+                    <option value="webp">WebP</option>
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  onClick={() => void convertSelectedImages()}
+                  disabled={!canConvertSelectedImages}
+                >
+                  转换所选图片
                 </button>
               </article>
 
               <article className="pdf-tool-card image-tool-card">
                 <h3>图片压缩</h3>
-                <p>计划提供高清、平衡、小体积等本地压缩预设。</p>
+                <p>高清、平衡、小体积等本地压缩预设仍在规划中。</p>
                 <button type="button" disabled>
-                  引擎尚未内置
+                  稍后启用
                 </button>
               </article>
 
               <article className="pdf-tool-card image-tool-card">
                 <h3>图片改尺寸</h3>
-                <p>计划支持按宽度、高度或等比规则批量调整尺寸。</p>
+                <p>按宽度、高度或等比规则批量调整尺寸仍在规划中。</p>
                 <button type="button" disabled>
-                  引擎尚未内置
+                  稍后启用
                 </button>
               </article>
 
               <article className="pdf-tool-card image-tool-card">
                 <h3>移除图片元数据</h3>
-                <p>计划在本机移除 EXIF 等图片元数据，不上传文件。</p>
+                <p>独立移除 EXIF 等图片元数据的工具仍在规划中。</p>
                 <button type="button" disabled>
-                  引擎尚未内置
+                  稍后启用
                 </button>
               </article>
             </div>
@@ -1153,7 +1466,7 @@ function App() {
               <div>
                 <h2>任务队列</h2>
                 <span>
-                  {tasks.length} 个任务 · {realLocalPdfTasks.length} 个本地 PDF · {selectedTasks.length} 个已选
+                  {tasks.length} 个任务 · {realLocalPdfTasks.length} 个本地 PDF · {realLocalImageTasks.length} 张本地图片 · {selectedTasks.length} 个已选
                 </span>
               </div>
             </div>
@@ -1254,9 +1567,9 @@ function App() {
             <p>
               {startupError
                 ? `启动初始化报告问题：${startupError}`
-                : qpdfAvailable
-                  ? "PDF 合并、拆分、页面提取和旋转已通过内置 qpdf 在本地启用。其他转换仍未启用。"
-                  : "转换引擎尚未内置。"}
+                : qpdfAvailable || imageEngineAvailable
+                  ? "PDF 工具与 JPG、PNG、WebP 图片转换会按可用引擎状态在本机启用。"
+                  : "转换引擎不可用。"}
             </p>
             <dl className="engine-list">
               {selfCheck.engines.map((engine) => (
@@ -1272,7 +1585,7 @@ function App() {
             <h2>错误日志</h2>
             <pre className="log-box">
               {inspectorErrorLog ||
-                "暂无错误日志。PDF 合并、拆分、页面提取、旋转或演示任务失败时会显示在这里。"}
+                "暂无错误日志。PDF 操作或图片转换失败时会显示在这里。"}
             </pre>
           </section>
 
@@ -1282,7 +1595,8 @@ function App() {
               <li>不上传。</li>
               <li>不会修改原文件。</li>
               <li>PDF 合并、拆分、页面提取和旋转仅使用内置本地 qpdf。</li>
-              <li>其他转换操作仍未启用。</li>
+              <li>JPG、PNG、WebP 转换仅使用内置本地 image-engine。</li>
+              <li>Office、其他图片格式与其他图片操作仍未启用。</li>
             </ul>
           </section>
         </aside>

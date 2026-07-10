@@ -6,13 +6,13 @@
 
 - Added a backend planning boundary for future Preview 0.2 image tools.
 - Added a backend detection boundary for a future bundled image-engine sidecar.
-- Added a first-party Rust `image-engine` macOS Apple Silicon sidecar for version and self-check smoke validation only.
-- Added a disabled Simplified Chinese Image Tools panel that explains image conversion is not enabled yet.
+- Added a first-party Rust `image-engine` macOS Apple Silicon sidecar with real local JPG/JPEG, PNG, and WebP conversion.
+- Added a guarded Simplified Chinese image conversion panel with batch selection and JPG, PNG, or WebP output choices.
+- Added collision-safe `converted` output planning, timeout handling, process cleanup, diagnostics capture, and output image validation.
 
 ### Unchanged
 
-- No real image conversion is enabled yet.
-- The first-party `image-engine` sidecar does not accept conversion commands yet.
+- AVIF, TIFF/TIF, HEIC, image compression, resizing, metadata removal, and images-to-PDF remain disabled.
 - No LibreOffice, PDFium, libvips, Sharp, ImageMagick, fonts, upload, cloud, server-side conversion, or telemetry is added.
 - Existing qpdf PDF merge, split, rotate, and page extraction behavior is unchanged.
 

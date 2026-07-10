@@ -400,6 +400,12 @@ h3 {
   background: #fff8e7;
 }
 
+.image-format-list .format-enabled {
+  border-color: #bed5dd;
+  color: #15566a;
+  background: #edf7fa;
+}
+
 .pdf-tool-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -419,6 +425,27 @@ h3 {
 }
 
 .image-tool-card {
+  background: #ffffff;
+}
+
+.image-target-field {
+  display: grid;
+  grid-template-columns: auto minmax(86px, 1fr);
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+  color: #52606d;
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.image-target-field select {
+  min-width: 0;
+  min-height: 30px;
+  border: 1px solid #c9d2dc;
+  border-radius: 6px;
+  padding: 0 8px;
+  color: #243444;
   background: #ffffff;
 }
 
