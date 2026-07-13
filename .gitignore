@@ -29,3 +29,19 @@ src-tauri/.engine-cache/
 tmp/
 temp/
 .cache/
+
+# Apple signing and notarization secrets/artifacts
+.env
+.env.*
+!.env.example
+*.p12
+*.p8
+*.cer
+*.pem
+*.keychain
+*.keychain-db
+*.provisionprofile
+*.mobileprovision
+notarization-log*.json
+*.dmg
+*.pkg

@@ -20,6 +20,7 @@
 - Stored startup engine timeout and failure diagnostics for the existing engine status and error panels.
 - Bundled qpdf and image-engine license/notice resources into the installed application.
 - Added a manifest-driven pre-bundle verification gate for required sidecars, SHA-256 digests, executable permissions, and license files.
+- Added a credential-free macOS Developer ID signing, notarization, stapling, and Gatekeeper verification checklist.
 
 ### Unchanged
 

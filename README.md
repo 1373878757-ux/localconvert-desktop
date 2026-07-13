@@ -253,6 +253,8 @@ Build the desktop app with the generic Tauri build command:
 npm run tauri build
 ```
 
+Unsigned local development and test builds remain supported. Developer ID signing and Apple notarization are opt-in release steps supplied through the local Keychain and environment variables; no signing credentials belong in this repository. Follow the [macOS signing and notarization workflow](docs/macos-signing-notarization.md) before distributing a macOS DMG outside the Mac App Store.
+
 Packaging should focus on a complete offline installer:
 
 - Use Tauri `externalBin` for executable sidecars.
