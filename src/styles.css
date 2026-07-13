@@ -428,6 +428,14 @@ h3 {
   background: #ffffff;
 }
 
+.image-conversion-matrix {
+  margin: 0 0 10px;
+  padding-left: 18px;
+  color: #52606d;
+  font-size: 0.76rem;
+  line-height: 1.55;
+}
+
 .image-target-field {
   display: grid;
   grid-template-columns: auto minmax(86px, 1fr);

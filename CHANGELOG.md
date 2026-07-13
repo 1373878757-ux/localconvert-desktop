@@ -2,7 +2,15 @@
 
 ## Unreleased
 
-No changes yet.
+### Preview 0.2 - Minimal Image Conversion
+
+- Aligned application version metadata to `0.2.0` for the Preview 0.2 development line.
+- Formalized the enabled local conversion matrix: JPG/JPEG to PNG or WebP, PNG to JPG or WebP, and WebP to JPG or PNG.
+- Kept real image conversion behind Tauri-native local paths, the asynchronous backend task registry, cancellation, and atomic no-overwrite output finalization.
+- Added explicit fail-closed guidance for same-format targets, browser-preview tasks, cancelled or running tasks, HEIC, and other unsupported formats.
+- Added acceptance coverage for the enabled codecs, HEIC rejection, image-task cancellation, source preservation, and collision-safe output publication.
+- Kept AVIF, TIFF/TIF, HEIC, compression, resizing, metadata removal, and images-to-PDF disabled.
+- Kept existing qpdf behavior unchanged and added no upload, cloud, server, telemetry, or network capability.
 
 ## Preview 0.1.2 - Reliability Release Candidate
 

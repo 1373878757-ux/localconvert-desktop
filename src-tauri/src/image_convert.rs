@@ -509,7 +509,8 @@ fn path_to_string(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use image::{DynamicImage, ImageFormat, Rgba, RgbaImage};
+    use crate::task_registry::{BackendTaskRegistry, BackendTaskStatus};
+    use image::{DynamicImage, ImageFormat, Rgb, RgbImage, Rgba, RgbaImage};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_case_dir(name: &str) -> PathBuf {
@@ -529,6 +530,22 @@ mod tests {
             .save_with_format(path, ImageFormat::Png)
             .expect("test PNG should be written");
         fs::read(path).expect("test PNG bytes should be readable")
+    }
+
+    fn create_test_rgb_image(path: &Path, format: ImageFormat) -> Vec<u8> {
+        let image = DynamicImage::ImageRgb8(RgbImage::from_pixel(5, 4, Rgb([40, 100, 180])));
+        image
+            .save_with_format(path, format)
+            .expect("test image should be written");
+        fs::read(path).expect("test image bytes should be readable")
+    }
+
+    fn assert_image_format(path: &Path, expected: ImageFormat) {
+        let reader = image::ImageReader::open(path)
+            .expect("output image should open")
+            .with_guessed_format()
+            .expect("output image format should be detected");
+        assert_eq!(reader.format(), Some(expected));
     }
 
     #[test]
@@ -584,6 +601,59 @@ mod tests {
         });
         assert!(!same_format.success);
         assert!(same_format.message.contains("must differ"));
+
+        let _ = fs::remove_dir_all(case_dir);
+    }
+
+    #[test]
+    fn rejects_heic_before_creating_output_folder() {
+        let case_dir = temp_case_dir("heic-disabled");
+        fs::create_dir_all(&case_dir).expect("test directory should be created");
+        let source = case_dir.join("手机 照片.heic");
+        fs::write(&source, b"not-decoded").expect("HEIC placeholder should be written");
+
+        let result = image_convert_file(ImageConvertExecutionRequest {
+            source: path_to_string(&source),
+            target_format: "jpg".to_string(),
+        });
+
+        assert!(!result.success);
+        assert!(result.message.contains("planned but not enabled"));
+        assert!(!case_dir.join("converted").exists());
+
+        let _ = fs::remove_dir_all(case_dir);
+    }
+
+    #[test]
+    fn cancelled_image_task_does_not_start_or_create_output_folder() {
+        let case_dir = temp_case_dir("cancel-before-start");
+        fs::create_dir_all(&case_dir).expect("test directory should be created");
+        let source = case_dir.join("cancel me.png");
+        create_test_png(&source);
+
+        let registry = BackendTaskRegistry::default();
+        let control = registry
+            .register("image-cancel-before-start", "image-convert")
+            .expect("image task should register");
+        registry
+            .cancel("image-cancel-before-start")
+            .expect("image task should cancel");
+
+        let result = image_convert_task(
+            ImageConvertExecutionRequest {
+                source: path_to_string(&source),
+                target_format: "webp".to_string(),
+            },
+            control,
+        );
+
+        assert!(!result.success);
+        assert!(result.message.contains("cancelled locally"));
+        assert_eq!(
+            registry.status("image-cancel-before-start"),
+            Ok(BackendTaskStatus::Cancelled)
+        );
+        assert!(!case_dir.join("converted").exists());
 
         let _ = fs::remove_dir_all(case_dir);
     }
@@ -652,5 +722,92 @@ mod tests {
                 .parent()
                 .expect("smoke directory should have a cleanup parent"),
         );
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[test]
+    fn bundled_sidecar_converts_jpeg_to_png_and_preserves_source() {
+        let case_dir = temp_case_dir("jpeg-to-png").join("客户 文件 with spaces");
+        fs::create_dir_all(&case_dir).expect("smoke directory should be created");
+        let source = case_dir.join("手机 照片.jpg");
+        let source_before = create_test_rgb_image(&source, ImageFormat::Jpeg);
+
+        let result = image_convert_file(ImageConvertExecutionRequest {
+            source: path_to_string(&source),
+            target_format: "png".to_string(),
+        });
+
+        assert!(result.success, "{}\n{}", result.message, result.stderr);
+        assert_eq!((result.width, result.height), (5, 4));
+        assert_image_format(Path::new(&result.output_path), ImageFormat::Png);
+        assert_eq!(
+            fs::read(&source).expect("source should remain readable"),
+            source_before
+        );
+
+        let _ = fs::remove_dir_all(
+            case_dir
+                .parent()
+                .expect("smoke directory should have a cleanup parent"),
+        );
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[test]
+    fn bundled_sidecar_converts_webp_to_jpeg_and_preserves_source() {
+        let case_dir = temp_case_dir("webp-to-jpeg").join("客户 文件 with spaces");
+        fs::create_dir_all(&case_dir).expect("smoke directory should be created");
+        let source = case_dir.join("网页 图片.webp");
+        let source_before = create_test_rgb_image(&source, ImageFormat::WebP);
+
+        let result = image_convert_file(ImageConvertExecutionRequest {
+            source: path_to_string(&source),
+            target_format: "jpg".to_string(),
+        });
+
+        assert!(result.success, "{}\n{}", result.message, result.stderr);
+        assert_eq!((result.width, result.height), (5, 4));
+        assert_image_format(Path::new(&result.output_path), ImageFormat::Jpeg);
+        assert_eq!(
+            fs::read(&source).expect("source should remain readable"),
+            source_before
+        );
+
+        let _ = fs::remove_dir_all(
+            case_dir
+                .parent()
+                .expect("smoke directory should have a cleanup parent"),
+        );
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[test]
+    fn bundled_sidecar_keeps_existing_output_and_uses_collision_suffix() {
+        let case_dir = temp_case_dir("end-to-end-collision");
+        let converted_dir = case_dir.join("converted");
+        fs::create_dir_all(&converted_dir).expect("converted directory should be created");
+        let source = case_dir.join("report.png");
+        create_test_png(&source);
+        let existing_output = converted_dir.join("report.webp");
+        fs::write(&existing_output, b"existing-user-output")
+            .expect("existing output should be written");
+
+        let result = image_convert_file(ImageConvertExecutionRequest {
+            source: path_to_string(&source),
+            target_format: "webp".to_string(),
+        });
+
+        assert!(result.success, "{}\n{}", result.message, result.stderr);
+        assert_eq!(
+            PathBuf::from(&result.output_path),
+            converted_dir.join("report (1).webp")
+        );
+        assert_eq!(
+            fs::read(&existing_output).expect("existing output should remain readable"),
+            b"existing-user-output"
+        );
+        assert_image_format(Path::new(&result.output_path), ImageFormat::WebP);
+
+        let _ = fs::remove_dir_all(case_dir);
     }
 }

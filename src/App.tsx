@@ -366,6 +366,9 @@ function App() {
   const selectedEnabledImageTasks = selectedTasks.filter((task) =>
     enabledImageExtensions.has(task.extension)
   );
+  const selectedHeicImageTasks = selectedTasks.filter(
+    (task) => task.extension === "heic"
+  );
   const selectedUnsupportedImageTasks = selectedTasks.filter(
     (task) => !enabledImageExtensions.has(task.extension)
   );
@@ -645,6 +648,10 @@ function App() {
 
     if (selectedTasks.length === 0) {
       return "请在任务队列中选择 JPG、JPEG、PNG 或 WebP 图片。";
+    }
+
+    if (selectedHeicImageTasks.length > 0) {
+      return `所选任务中有 ${selectedHeicImageTasks.length} 个 HEIC 文件。当前 image-engine 不支持 HEIC 解码或方向处理，不会启动转换。`;
     }
 
     if (selectedUnsupportedImageTasks.length > 0) {
@@ -1825,7 +1832,7 @@ function App() {
           <section className="image-tools-panel" aria-label="Preview 0.2 图片转换">
             <div className="pdf-tools-header">
               <div>
-                <p className="section-kicker">Preview 0.2</p>
+                <p className="section-kicker">Preview 0.2 · 本地功能预览</p>
                 <h2>图片格式转换</h2>
                 <p>
                   {imageEngineAvailable
@@ -1873,6 +1880,11 @@ function App() {
               <article className="pdf-tool-card image-tool-card">
                 <h3>图片格式转换</h3>
                 <p>选择任务和输出格式。结果写入源文件旁边的 converted 文件夹，不覆盖原文件。</p>
+                <ul className="image-conversion-matrix" aria-label="已启用的图片转换方向">
+                  <li>JPG/JPEG → PNG、WebP</li>
+                  <li>PNG → JPG、WebP</li>
+                  <li>WebP → JPG、PNG</li>
+                </ul>
                 <label className="image-target-field">
                   <span>输出格式</span>
                   <select
