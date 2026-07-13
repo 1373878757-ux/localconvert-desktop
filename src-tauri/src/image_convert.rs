@@ -1,4 +1,7 @@
-use crate::{image_engine, image_ops};
+use crate::{
+    image_engine, image_ops,
+    task_registry::{ChildProcessState, TaskControl},
+};
 use serde::{Deserialize, Serialize};
 use std::{
     ffi::OsString,
@@ -50,35 +53,53 @@ struct ImageEngineExecutionResult {
     stderr: String,
     exit_code: Option<i32>,
     timed_out: bool,
+    cancelled: bool,
 }
 
-#[tauri::command]
+#[cfg(test)]
 pub fn image_convert_file(request: ImageConvertExecutionRequest) -> ImageConvertResult {
+    image_convert_task(request, TaskControl::detached("image-convert"))
+}
+
+pub(crate) fn image_convert_task(
+    request: ImageConvertExecutionRequest,
+    control: TaskControl,
+) -> ImageConvertResult {
     let source_path = request.source.trim().to_string();
     let source_format = source_format_from_path(Path::new(&source_path)).unwrap_or_default();
     let target_format = normalize_target_format(&request.target_format).unwrap_or_default();
 
-    execute_image_convert(&request).unwrap_or_else(|message| ImageConvertResult {
-        success: false,
-        operation: "convert",
-        source_path,
-        output_path: String::new(),
-        source_format,
-        target_format,
-        output_bytes: 0,
-        width: 0,
-        height: 0,
-        stdout: String::new(),
-        stderr: String::new(),
-        exit_code: None,
-        timed_out: false,
-        message,
-    })
+    let mut result =
+        execute_image_convert(&request, &control).unwrap_or_else(|message| ImageConvertResult {
+            success: false,
+            operation: "convert",
+            source_path,
+            output_path: String::new(),
+            source_format,
+            target_format,
+            output_bytes: 0,
+            width: 0,
+            height: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: None,
+            timed_out: false,
+            message,
+        });
+    if control.is_cancelled() {
+        result.mark_cancelled();
+    }
+    result
 }
 
 fn execute_image_convert(
     request: &ImageConvertExecutionRequest,
+    control: &TaskControl,
 ) -> Result<ImageConvertResult, String> {
+    if control.is_cancelled() {
+        return Err("Image conversion task was cancelled before execution.".to_string());
+    }
+
     let source_path = validate_source_image(&request.source)?;
     let source_format = source_format_from_path(&source_path)?;
     let target_format = normalize_target_format(&request.target_format)?;
@@ -112,7 +133,28 @@ fn execute_image_convert(
         &image_engine_path,
         &plan.arguments,
         Duration::from_secs(IMAGE_CONVERT_TIMEOUT_SECONDS),
+        control,
     )?;
+
+    if execution.cancelled || control.is_cancelled() {
+        remove_partial_output(&output_path);
+        return Ok(ImageConvertResult {
+            success: false,
+            operation: "convert",
+            source_path: path_to_string(&source_path),
+            output_path: path_to_string(&output_path),
+            source_format,
+            target_format,
+            output_bytes: 0,
+            width: 0,
+            height: 0,
+            stdout: execution.stdout,
+            stderr: execution.stderr,
+            exit_code: execution.exit_code,
+            timed_out: false,
+            message: "Image conversion task was cancelled locally.".to_string(),
+        });
+    }
 
     if execution.timed_out {
         remove_partial_output(&output_path);
@@ -193,6 +235,23 @@ fn execute_image_convert(
         timed_out: false,
         message: "Image conversion completed locally with bundled image-engine.".to_string(),
     })
+}
+
+impl ImageConvertResult {
+    pub(crate) fn succeeded(&self) -> bool {
+        self.success
+    }
+
+    pub(crate) fn mark_cancelled(&mut self) {
+        if self.success {
+            remove_partial_output(Path::new(&self.output_path));
+        }
+        self.success = false;
+        self.output_bytes = 0;
+        self.width = 0;
+        self.height = 0;
+        self.message = "Image conversion task was cancelled locally.".to_string();
+    }
 }
 
 fn validate_source_image(source: &str) -> Result<PathBuf, String> {
@@ -317,6 +376,7 @@ fn run_image_engine_command(
     executable: &Path,
     arguments: &[OsString],
     timeout: Duration,
+    control: &TaskControl,
 ) -> Result<ImageEngineExecutionResult, String> {
     let mut child = Command::new(executable)
         .args(arguments)
@@ -333,20 +393,38 @@ fn run_image_engine_command(
 
     let stdout_reader = child.stdout.take().map(read_pipe_in_thread);
     let stderr_reader = child.stderr.take().map(read_pipe_in_thread);
+    if !control.attach_child(child)? {
+        return Ok(ImageEngineExecutionResult {
+            stdout: join_pipe_reader(stdout_reader),
+            stderr: join_pipe_reader(stderr_reader),
+            exit_code: None,
+            timed_out: false,
+            cancelled: true,
+        });
+    }
     let started_at = Instant::now();
 
-    let (exit_code, timed_out) = loop {
-        if let Some(status) = child
-            .try_wait()
-            .map_err(|error| format!("Unable to inspect image-engine process state: {error}"))?
-        {
-            break (status.code(), false);
+    let (exit_code, timed_out, cancelled) = loop {
+        let process_state = match control.poll_child() {
+            Ok(state) => state,
+            Err(error) => {
+                let _ = control.terminate_child();
+                return Err(format!(
+                    "Unable to inspect image-engine process state: {error}"
+                ));
+            }
+        };
+
+        match process_state {
+            ChildProcessState::Running => {}
+            ChildProcessState::Exited(exit_code) => break (exit_code, false, false),
+            ChildProcessState::Cancelled => break (None, false, true),
         }
 
         if started_at.elapsed() >= timeout {
-            let _ = child.kill();
-            let _ = child.wait();
-            break (None, true);
+            let _ = control.terminate_child();
+            let cancelled = control.is_cancelled();
+            break (None, !cancelled, cancelled);
         }
 
         thread::sleep(Duration::from_millis(50));
@@ -357,6 +435,7 @@ fn run_image_engine_command(
         stderr: join_pipe_reader(stderr_reader),
         exit_code,
         timed_out,
+        cancelled,
     })
 }
 

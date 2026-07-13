@@ -11,6 +11,8 @@
 - Added a first-party Rust `image-engine` macOS Apple Silicon sidecar with real local JPG/JPEG, PNG, and WebP conversion.
 - Added a guarded Simplified Chinese image conversion panel with batch selection and JPG, PNG, or WebP output choices.
 - Added collision-safe `converted` output planning, timeout handling, process cleanup, diagnostics capture, and output image validation.
+- Added a Rust backend task registry for real qpdf and image-engine jobs, with async Tauri command boundaries and stable task IDs.
+- Added process-backed cancellation, terminal cancelled-state arbitration, and partial-output cleanup for running local conversions.
 
 ### Unchanged
 
@@ -18,6 +20,7 @@
 - AVIF, TIFF/TIF, HEIC, image compression, resizing, metadata removal, and images-to-PDF remain disabled.
 - No LibreOffice, PDFium, libvips, Sharp, ImageMagick, fonts, upload, cloud, server-side conversion, or telemetry is added.
 - Existing qpdf PDF merge, split, rotate, and page extraction behavior is unchanged.
+- Existing qpdf argument plans and operation semantics are unchanged; only execution scheduling and cancellation ownership moved to the backend task boundary.
 
 ## Preview 0.1.1 - qpdf macOS Apple Silicon Chinese UI
 

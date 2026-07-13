@@ -86,7 +86,7 @@ LocalConvert Desktop should use a layered desktop architecture:
 
 1. The React and TypeScript frontend manages file selection, queue display, options, progress, cancellation, retry, summaries, and output-folder actions.
 2. Tauri v2 exposes Rust backend commands for validated conversion requests and filesystem operations.
-3. Rust commands normalize paths, create output destinations, launch bundled sidecar engines, enforce timeouts, capture stdout and stderr, validate outputs, and return structured task results.
+3. Rust commands normalize paths, create output destinations, register real work by `taskId`, run blocking sidecar execution on Tauri's background blocking pool, enforce timeouts and cancellation, capture stdout and stderr, validate outputs, and return structured task results.
 4. Bundled conversion engines perform format-specific work as sidecar binaries or packaged runtime assets.
 
 The frontend should not directly shell out to conversion tools. It should call Tauri commands with structured request data. The Rust side should be responsible for process safety, path handling, engine discovery, cleanup, and validation.
@@ -199,6 +199,9 @@ Expected queue behavior:
 - Users should be able to retry failed tasks.
 - Users should be able to cancel pending tasks.
 - Running-task cancellation should terminate the child process when supported by the active engine.
+- Real conversion jobs must be tracked in a Rust backend registry so frontend state is not the authority for process lifetime.
+- A cancelled backend task must remain cancelled even if a sidecar completion result arrives late, and task-owned partial outputs must be removed.
+- Running tasks must be cancelled before they can be removed from the visible queue.
 - Completed tasks should offer an action to open the output folder.
 - Batch completion should show a success and failure summary.
 
@@ -221,7 +224,7 @@ Office rendering can differ from the source application's native output. The v1 
 
 ## Development Setup
 
-This repository includes a minimal Tauri v2, React, and TypeScript app scaffold for LocalConvert Desktop. The current implementation includes a Simplified Chinese app UI, branded startup splash screen, Tauri-native file selection and drag-and-drop intake, a local task queue, backend output path planning, the bundled macOS Apple Silicon qpdf sidecar, startup engine self-checks, real local PDF merge, split, page extraction, and rotate execution, and real local JPG/JPEG, PNG, and WebP conversion through the first-party Rust `image-engine` sidecar. Native desktop intake records validated absolute paths and reads filesystem metadata only; browser-only `File` fallback tasks remain metadata previews and cannot run real conversion operations. AVIF, TIFF/TIF, HEIC, image compression, resizing, metadata removal, images-to-PDF, Office conversion, and PDFium rasterization remain disabled until intentionally enabled in later implementation steps.
+This repository includes a minimal Tauri v2, React, and TypeScript app scaffold for LocalConvert Desktop. The current implementation includes a Simplified Chinese app UI, branded startup splash screen, Tauri-native file selection and drag-and-drop intake, a local task queue, backend output path planning, the bundled macOS Apple Silicon qpdf sidecar, startup engine self-checks, real local PDF merge, split, page extraction, and rotate execution, and real local JPG/JPEG, PNG, and WebP conversion through the first-party Rust `image-engine` sidecar. Real qpdf and image-engine jobs run through an asynchronous Rust task registry with task-ID status arbitration, child-process cancellation, and partial-output cleanup. Native desktop intake records validated absolute paths and reads filesystem metadata only; browser-only `File` fallback tasks remain metadata previews and cannot run real conversion operations. AVIF, TIFF/TIF, HEIC, image compression, resizing, metadata removal, images-to-PDF, Office conversion, and PDFium rasterization remain disabled until intentionally enabled in later implementation steps.
 
 Development machines need the normal Tauri v2 toolchain requirements for the target platform, including Node.js, npm, Rust 1.85 or newer, Cargo, and platform-specific build dependencies. Rust 1.85 is required by the pinned image codec dependency used to build the first-party `image-engine` sidecar.
 

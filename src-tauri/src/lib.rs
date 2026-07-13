@@ -9,11 +9,13 @@ use std::{
 };
 use tauri::Manager;
 
+mod backend_tasks;
 mod image_convert;
 mod image_engine;
 mod image_ops;
 mod native_intake;
 mod qpdf;
+mod task_registry;
 
 const DEFAULT_OUTPUT_STRATEGY: &str = "converted-folder-next-to-source";
 const COLLISION_STRATEGY_EXPLANATION: &str =
@@ -319,6 +321,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(StartupState::default())
+        .manage(task_registry::BackendTaskRegistry::default())
         .setup(|app| {
             let startup_state = app.state::<StartupState>().inner().clone();
             let app_handle = app.handle().clone();
@@ -334,15 +337,16 @@ pub fn run() {
             startup_status,
             plan_output_path,
             native_intake::inspect_native_paths,
-            image_convert::image_convert_file,
+            backend_tasks::image_convert_file,
             image_ops::plan_image_convert,
             image_ops::plan_image_compress,
             image_ops::plan_image_resize,
             image_ops::plan_image_remove_metadata,
-            qpdf::qpdf_merge_pdfs,
-            qpdf::qpdf_split_pdf,
-            qpdf::qpdf_extract_pages,
-            qpdf::qpdf_rotate_pages
+            backend_tasks::qpdf_merge_pdfs,
+            backend_tasks::qpdf_split_pdf,
+            backend_tasks::qpdf_extract_pages,
+            backend_tasks::qpdf_rotate_pages,
+            backend_tasks::cancel_task
         ])
         .run(tauri::generate_context!())
         .expect("failed to run LocalConvert Desktop");

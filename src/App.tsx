@@ -132,6 +132,29 @@ type ImageConvertResult = {
   message: string;
 };
 
+type BackendTaskStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+type BackendTaskResponse<T> = {
+  taskId: string;
+  operation: string;
+  status: BackendTaskStatus;
+  result: T;
+};
+
+type CancelTaskResponse = {
+  taskId: string;
+  operation: string;
+  status: BackendTaskStatus;
+  cancellationRequested: boolean;
+  processTerminationRequested: boolean;
+  message: string;
+};
+
 type EnabledImageFormat = "jpg" | "png" | "webp";
 
 const fallbackSelfCheck: EngineSelfCheck = {
@@ -182,6 +205,24 @@ const outputNameExample = [
   getOutputName("report.pdf", ["report.pdf", "report (1).pdf"])
 ];
 
+function backendResponseStatus<T extends { success: boolean }>(
+  response: BackendTaskResponse<T>
+): TaskStatus {
+  if (response.status === "cancelled") {
+    return "cancelled";
+  }
+
+  return response.status === "completed" && response.result.success
+    ? "completed"
+    : "failed";
+}
+
+function createBackendTaskId(operation: string, taskId: string): string {
+  return `${operation}-${taskId}-${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2, 8)}`;
+}
+
 function App() {
   const [selfCheck, setSelfCheck] = useState<EngineSelfCheck>(fallbackSelfCheck);
   const [tasks, setTasks] = useState<LocalTask[]>([]);
@@ -201,6 +242,7 @@ function App() {
   const nativePathIntakeRef = useRef<(paths: string[]) => Promise<void>>(
     async () => undefined
   );
+  const cancelledTaskIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     async function loadSelfCheck() {
@@ -851,11 +893,13 @@ function App() {
   }
 
   function retryTask(taskId: string) {
+    cancelledTaskIdsRef.current.delete(taskId);
     setTasks((currentTasks) =>
       currentTasks.map((task) =>
         task.taskId === taskId
           ? {
               ...task,
+              backendTaskId: undefined,
               status: "waiting",
               errorLog: ""
             }
@@ -864,22 +908,109 @@ function App() {
     );
   }
 
-  function cancelTask(taskId: string) {
-    setTasks((currentTasks) =>
-      currentTasks.map((task) =>
-        task.taskId === taskId && task.status !== "completed"
-          ? {
-              ...task,
-              status: "cancelled"
-            }
-          : task
-      )
-    );
+  async function cancelTask(taskId: string) {
+    const task = tasks.find((candidate) => candidate.taskId === taskId);
+    if (!task || task.status === "completed" || task.status === "cancelled") {
+      return;
+    }
+
+    if (task.status !== "converting") {
+      cancelledTaskIdsRef.current.add(taskId);
+      setTasks((currentTasks) =>
+        currentTasks.map((currentTask) =>
+          currentTask.taskId === taskId
+            ? {
+                ...currentTask,
+                backendTaskId: undefined,
+                status: "cancelled",
+                errorLog: ""
+              }
+            : currentTask
+        )
+      );
+      setFolderMessage("等待任务已在本地取消，未启动任何转换进程。");
+      return;
+    }
+
+    if (!task.backendTaskId) {
+      const message =
+        "该运行任务缺少后端任务 ID，无法确认进程已停止；请等待任务结束后重试。";
+      setTasks((currentTasks) =>
+        currentTasks.map((currentTask) =>
+          currentTask.taskId === taskId
+            ? { ...currentTask, errorLog: message }
+            : currentTask
+        )
+      );
+      setFolderMessage(message);
+      return;
+    }
+
+    const backendTaskId = task.backendTaskId;
+    try {
+      const response = await invoke<CancelTaskResponse>("cancel_task", {
+        taskId: backendTaskId
+      });
+
+      if (!response.cancellationRequested && response.status !== "cancelled") {
+        setFolderMessage("后端任务已经结束，无法再取消。其最终结果会显示在队列中。");
+        return;
+      }
+
+      const linkedTaskIds = tasks
+        .filter((candidate) => candidate.backendTaskId === backendTaskId)
+        .map((candidate) => candidate.taskId);
+      for (const linkedTaskId of linkedTaskIds) {
+        cancelledTaskIdsRef.current.add(linkedTaskId);
+      }
+
+      setTasks((currentTasks) =>
+        currentTasks.map((currentTask) =>
+          currentTask.backendTaskId === backendTaskId
+            ? {
+                ...currentTask,
+                status: "cancelled",
+                errorLog: ""
+              }
+            : currentTask
+        )
+      );
+      setFolderMessage(
+        response.processTerminationRequested
+          ? "任务已取消，正在运行的本地转换进程已终止。"
+          : "任务已取消；后端未发现仍在运行的子进程。"
+      );
+    } catch (error) {
+      const message =
+        typeof error === "string"
+          ? error
+          : error instanceof Error
+            ? error.message
+            : "后端取消请求失败。";
+      setTasks((currentTasks) =>
+        currentTasks.map((currentTask) =>
+          currentTask.backendTaskId === backendTaskId
+            ? {
+                ...currentTask,
+                errorLog: `取消失败：${message}`
+              }
+            : currentTask
+        )
+      );
+      setFolderMessage("未能确认本地进程已停止。任务仍保持处理中，请查看错误日志。");
+    }
   }
 
   function removeTask(taskId: string) {
+    const task = tasks.find((candidate) => candidate.taskId === taskId);
+    if (task?.status === "converting") {
+      setFolderMessage("运行中的任务不能直接移除。请先取消并等待后端确认。");
+      return;
+    }
+
+    cancelledTaskIdsRef.current.delete(taskId);
     setTasks((currentTasks) =>
-      currentTasks.filter((task) => task.taskId !== taskId)
+      currentTasks.filter((currentTask) => currentTask.taskId !== taskId)
     );
     setSelectedTaskIds((currentIds) => {
       const nextIds = new Set(currentIds);
@@ -914,11 +1045,19 @@ function App() {
     }
 
     const taskIds = new Set(mergeTasks.map((task) => task.taskId));
+    const backendTaskId = createBackendTaskId(
+      "qpdf-merge",
+      mergeTasks[0].taskId
+    );
+    for (const taskId of taskIds) {
+      cancelledTaskIdsRef.current.delete(taskId);
+    }
     setTasks((currentTasks) =>
       currentTasks.map((task) =>
         taskIds.has(task.taskId)
           ? {
               ...task,
+              backendTaskId,
               status: "converting",
               errorLog: ""
             }
@@ -940,44 +1079,69 @@ function App() {
           outputStrategy: "converted-folder-next-to-source"
         }
       });
-      const result = await invoke<QpdfMergeResult>("qpdf_merge_pdfs", {
-        request: {
-          sources: mergeTasks.map((task) => task.sourcePath),
-          output: outputPlan.plannedOutputPath
+      const response = await invoke<BackendTaskResponse<QpdfMergeResult>>(
+        "qpdf_merge_pdfs",
+        {
+          taskId: backendTaskId,
+          request: {
+            sources: mergeTasks.map((task) => task.sourcePath),
+            output: outputPlan.plannedOutputPath
+          }
         }
-      });
+      );
+      const result = response.result;
+      const resultStatus = backendResponseStatus(response);
       const log = formatMergeLog(result);
 
       setTasks((currentTasks) =>
-        currentTasks.map((task) =>
-          taskIds.has(task.taskId)
-            ? {
-                ...task,
-                status: result.success ? "completed" : "failed",
-                outputPreview: result.outputPath || outputPlan.plannedOutputPath,
-                errorLog: result.success ? "" : log
-              }
-            : task
-        )
+        currentTasks.map((task) => {
+          if (!taskIds.has(task.taskId)) {
+            return task;
+          }
+
+          const status =
+            task.status === "cancelled" ? "cancelled" : resultStatus;
+          return {
+            ...task,
+            backendTaskId: undefined,
+            status,
+            outputPreview:
+              status === "completed"
+                ? result.outputPath || outputPlan.plannedOutputPath
+                : task.outputPreview,
+            errorLog: status === "failed" ? log : ""
+          };
+        })
       );
       setFolderMessage(
-        result.success
-          ? `已在本地合并 ${mergeTasks.length} 个 PDF。输出：${result.outputPath}`
-          : "PDF 合并失败。请查看失败任务的错误日志。"
+        resultStatus === "cancelled"
+          ? "PDF 合并已在本地取消，未保留未完成的输出。"
+          : result.success
+            ? `已在本地合并 ${mergeTasks.length} 个 PDF。输出：${result.outputPath}`
+            : "PDF 合并失败。请查看失败任务的错误日志。"
       );
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : "PDF 合并失败。";
+        typeof error === "string"
+          ? error
+          : error instanceof Error
+            ? error.message
+            : "PDF 合并失败。";
       setTasks((currentTasks) =>
-        currentTasks.map((task) =>
-          taskIds.has(task.taskId)
-            ? {
-                ...task,
-                status: "failed",
-                errorLog: message
-              }
-            : task
-        )
+        currentTasks.map((task) => {
+          if (!taskIds.has(task.taskId)) {
+            return task;
+          }
+          if (task.status === "cancelled") {
+            return { ...task, backendTaskId: undefined };
+          }
+          return {
+            ...task,
+            backendTaskId: undefined,
+            status: "failed",
+            errorLog: message
+          };
+        })
       );
       setFolderMessage("PDF 合并失败。请查看失败任务的错误日志。");
     }
@@ -991,11 +1155,14 @@ function App() {
       return;
     }
 
+    const backendTaskId = createBackendTaskId("qpdf-split", task.taskId);
+    cancelledTaskIdsRef.current.delete(task.taskId);
     setTasks((currentTasks) =>
       currentTasks.map((currentTask) =>
         currentTask.taskId === task.taskId
           ? {
               ...currentTask,
+              backendTaskId,
               status: "converting",
               errorLog: ""
             }
@@ -1004,48 +1171,70 @@ function App() {
     );
 
     try {
-      const result = await invoke<QpdfSplitResult>("qpdf_split_pdf", {
-        request: {
-          source: task.sourcePath,
-          outputDirectory: buildSiblingDirectory(task.sourcePath, "converted"),
-          filenamePrefix: `${getBaseName(task.displayName)}-page`
+      const response = await invoke<BackendTaskResponse<QpdfSplitResult>>(
+        "qpdf_split_pdf",
+        {
+          taskId: backendTaskId,
+          request: {
+            source: task.sourcePath,
+            outputDirectory: buildSiblingDirectory(task.sourcePath, "converted"),
+            filenamePrefix: `${getBaseName(task.displayName)}-page`
+          }
         }
-      });
+      );
+      const result = response.result;
+      const resultStatus = backendResponseStatus(response);
       const log = formatSplitLog(result);
       const outputPreview = result.success
         ? `${result.outputPaths.length} 个文件，位于 ${result.outputDirectory}`
         : task.outputPreview;
 
       setTasks((currentTasks) =>
-        currentTasks.map((currentTask) =>
-          currentTask.taskId === task.taskId
-            ? {
-                ...currentTask,
-                status: result.success ? "completed" : "failed",
-                outputPreview,
-                errorLog: result.success ? "" : log
-              }
-            : currentTask
-        )
+        currentTasks.map((currentTask) => {
+          if (currentTask.taskId !== task.taskId) {
+            return currentTask;
+          }
+
+          const status =
+            currentTask.status === "cancelled" ? "cancelled" : resultStatus;
+          return {
+            ...currentTask,
+            backendTaskId: undefined,
+            status,
+            outputPreview: status === "completed" ? outputPreview : currentTask.outputPreview,
+            errorLog: status === "failed" ? log : ""
+          };
+        })
       );
       setFolderMessage(
-        result.success
-          ? `已在本地拆分 PDF，生成 ${result.outputPaths.length} 个文件：${result.outputPaths.join(" | ")}`
-          : "PDF 拆分失败。请查看失败任务的错误日志。"
+        resultStatus === "cancelled"
+          ? "PDF 拆分已在本地取消，未保留未完成的拆分文件。"
+          : result.success
+            ? `已在本地拆分 PDF，生成 ${result.outputPaths.length} 个文件：${result.outputPaths.join(" | ")}`
+            : "PDF 拆分失败。请查看失败任务的错误日志。"
       );
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : "PDF 拆分失败。";
+        typeof error === "string"
+          ? error
+          : error instanceof Error
+            ? error.message
+            : "PDF 拆分失败。";
       setTasks((currentTasks) =>
-        currentTasks.map((currentTask) =>
-          currentTask.taskId === task.taskId
-            ? {
-                ...currentTask,
-                status: "failed",
-                errorLog: message
-              }
-            : currentTask
-        )
+        currentTasks.map((currentTask) => {
+          if (currentTask.taskId !== task.taskId) {
+            return currentTask;
+          }
+          if (currentTask.status === "cancelled") {
+            return { ...currentTask, backendTaskId: undefined };
+          }
+          return {
+            ...currentTask,
+            backendTaskId: undefined,
+            status: "failed",
+            errorLog: message
+          };
+        })
       );
       setFolderMessage("PDF 拆分失败。请查看失败任务的错误日志。");
     }
@@ -1065,11 +1254,14 @@ function App() {
       return;
     }
 
+    const backendTaskId = createBackendTaskId("qpdf-extract", task.taskId);
+    cancelledTaskIdsRef.current.delete(task.taskId);
     setTasks((currentTasks) =>
       currentTasks.map((currentTask) =>
         currentTask.taskId === task.taskId
           ? {
               ...currentTask,
+              backendTaskId,
               status: "converting",
               errorLog: ""
             }
@@ -1089,45 +1281,68 @@ function App() {
           outputStrategy: "converted-folder-next-to-source"
         }
       });
-      const result = await invoke<QpdfExtractResult>("qpdf_extract_pages", {
-        request: {
-          source: task.sourcePath,
-          pages,
-          output: outputPlan.plannedOutputPath
+      const response = await invoke<BackendTaskResponse<QpdfExtractResult>>(
+        "qpdf_extract_pages",
+        {
+          taskId: backendTaskId,
+          request: {
+            source: task.sourcePath,
+            pages,
+            output: outputPlan.plannedOutputPath
+          }
         }
-      });
+      );
+      const result = response.result;
+      const resultStatus = backendResponseStatus(response);
       const log = formatExtractLog(result);
 
       setTasks((currentTasks) =>
-        currentTasks.map((currentTask) =>
-          currentTask.taskId === task.taskId
-            ? {
-                ...currentTask,
-                status: result.success ? "completed" : "failed",
-                outputPreview: result.success ? result.outputPath : task.outputPreview,
-                errorLog: result.success ? "" : log
-              }
-            : currentTask
-        )
+        currentTasks.map((currentTask) => {
+          if (currentTask.taskId !== task.taskId) {
+            return currentTask;
+          }
+
+          const status =
+            currentTask.status === "cancelled" ? "cancelled" : resultStatus;
+          return {
+            ...currentTask,
+            backendTaskId: undefined,
+            status,
+            outputPreview:
+              status === "completed" ? result.outputPath : currentTask.outputPreview,
+            errorLog: status === "failed" ? log : ""
+          };
+        })
       );
       setFolderMessage(
-        result.success
-          ? `已在本地提取页面 ${result.pages}。输出：${result.outputPath}`
-          : "PDF 页面提取失败。请查看失败任务的错误日志。"
+        resultStatus === "cancelled"
+          ? "PDF 页面提取已在本地取消，未保留未完成的输出。"
+          : result.success
+            ? `已在本地提取页面 ${result.pages}。输出：${result.outputPath}`
+            : "PDF 页面提取失败。请查看失败任务的错误日志。"
       );
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : "PDF 页面提取失败。";
+        typeof error === "string"
+          ? error
+          : error instanceof Error
+            ? error.message
+            : "PDF 页面提取失败。";
       setTasks((currentTasks) =>
-        currentTasks.map((currentTask) =>
-          currentTask.taskId === task.taskId
-            ? {
-                ...currentTask,
-                status: "failed",
-                errorLog: message
-              }
-            : currentTask
-        )
+        currentTasks.map((currentTask) => {
+          if (currentTask.taskId !== task.taskId) {
+            return currentTask;
+          }
+          if (currentTask.status === "cancelled") {
+            return { ...currentTask, backendTaskId: undefined };
+          }
+          return {
+            ...currentTask,
+            backendTaskId: undefined,
+            status: "failed",
+            errorLog: message
+          };
+        })
       );
       setFolderMessage("PDF 页面提取失败。请查看失败任务的错误日志。");
     }
@@ -1141,11 +1356,14 @@ function App() {
       return;
     }
 
+    const backendTaskId = createBackendTaskId("qpdf-rotate", task.taskId);
+    cancelledTaskIdsRef.current.delete(task.taskId);
     setTasks((currentTasks) =>
       currentTasks.map((currentTask) =>
         currentTask.taskId === task.taskId
           ? {
               ...currentTask,
+              backendTaskId,
               status: "converting",
               errorLog: ""
             }
@@ -1165,46 +1383,69 @@ function App() {
           outputStrategy: "converted-folder-next-to-source"
         }
       });
-      const result = await invoke<QpdfRotateResult>("qpdf_rotate_pages", {
-        request: {
-          source: task.sourcePath,
-          pages: "",
-          degrees,
-          output: outputPlan.plannedOutputPath
+      const response = await invoke<BackendTaskResponse<QpdfRotateResult>>(
+        "qpdf_rotate_pages",
+        {
+          taskId: backendTaskId,
+          request: {
+            source: task.sourcePath,
+            pages: "",
+            degrees,
+            output: outputPlan.plannedOutputPath
+          }
         }
-      });
+      );
+      const result = response.result;
+      const resultStatus = backendResponseStatus(response);
       const log = formatRotateLog(result);
 
       setTasks((currentTasks) =>
-        currentTasks.map((currentTask) =>
-          currentTask.taskId === task.taskId
-            ? {
-                ...currentTask,
-                status: result.success ? "completed" : "failed",
-                outputPreview: result.success ? result.outputPath : task.outputPreview,
-                errorLog: result.success ? "" : log
-              }
-            : currentTask
-        )
+        currentTasks.map((currentTask) => {
+          if (currentTask.taskId !== task.taskId) {
+            return currentTask;
+          }
+
+          const status =
+            currentTask.status === "cancelled" ? "cancelled" : resultStatus;
+          return {
+            ...currentTask,
+            backendTaskId: undefined,
+            status,
+            outputPreview:
+              status === "completed" ? result.outputPath : currentTask.outputPreview,
+            errorLog: status === "failed" ? log : ""
+          };
+        })
       );
       setFolderMessage(
-        result.success
-          ? `已在本地旋转 PDF（${result.degrees}）。输出：${result.outputPath}`
-          : "PDF 旋转失败。请查看失败任务的错误日志。"
+        resultStatus === "cancelled"
+          ? "PDF 旋转已在本地取消，未保留未完成的输出。"
+          : result.success
+            ? `已在本地旋转 PDF（${result.degrees}）。输出：${result.outputPath}`
+            : "PDF 旋转失败。请查看失败任务的错误日志。"
       );
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : "PDF 旋转失败。";
+        typeof error === "string"
+          ? error
+          : error instanceof Error
+            ? error.message
+            : "PDF 旋转失败。";
       setTasks((currentTasks) =>
-        currentTasks.map((currentTask) =>
-          currentTask.taskId === task.taskId
-            ? {
-                ...currentTask,
-                status: "failed",
-                errorLog: message
-              }
-            : currentTask
-        )
+        currentTasks.map((currentTask) => {
+          if (currentTask.taskId !== task.taskId) {
+            return currentTask;
+          }
+          if (currentTask.status === "cancelled") {
+            return { ...currentTask, backendTaskId: undefined };
+          }
+          return {
+            ...currentTask,
+            backendTaskId: undefined,
+            status: "failed",
+            errorLog: message
+          };
+        })
       );
       setFolderMessage("PDF 旋转失败。请查看失败任务的错误日志。");
     }
@@ -1217,39 +1458,59 @@ function App() {
     }
 
     const conversionTasks = selectedRealLocalImageTasks;
-    const taskIds = new Set(conversionTasks.map((task) => task.taskId));
     const targetFormat = imageTargetFormat;
-    setTasks((currentTasks) =>
-      currentTasks.map((task) =>
-        taskIds.has(task.taskId)
-          ? {
-              ...task,
-              status: "converting",
-              errorLog: ""
-            }
-          : task
-      )
-    );
 
     let successCount = 0;
     let failureCount = 0;
+    let cancelledCount = 0;
     const outputPaths: string[] = [];
 
     for (const task of conversionTasks) {
+      if (cancelledTaskIdsRef.current.has(task.taskId)) {
+        cancelledCount += 1;
+        continue;
+      }
+
       if (!task.sourcePath) {
         failureCount += 1;
         continue;
       }
 
+      const backendTaskId = createBackendTaskId(
+        "image-convert",
+        task.taskId
+      );
+      cancelledTaskIdsRef.current.delete(task.taskId);
+      setTasks((currentTasks) =>
+        currentTasks.map((currentTask) =>
+          currentTask.taskId === task.taskId
+            ? {
+                ...currentTask,
+                backendTaskId,
+                status: "converting",
+                errorLog: ""
+              }
+            : currentTask
+        )
+      );
+
       try {
-        const result = await invoke<ImageConvertResult>("image_convert_file", {
-          request: {
-            source: task.sourcePath,
-            targetFormat
+        const response = await invoke<BackendTaskResponse<ImageConvertResult>>(
+          "image_convert_file",
+          {
+            taskId: backendTaskId,
+            request: {
+              source: task.sourcePath,
+              targetFormat
+            }
           }
-        });
+        );
+        const result = response.result;
+        const resultStatus = backendResponseStatus(response);
         const log = formatImageConvertLog(result);
-        if (result.success) {
+        if (resultStatus === "cancelled") {
+          cancelledCount += 1;
+        } else if (result.success) {
           successCount += 1;
           outputPaths.push(result.outputPath);
         } else {
@@ -1257,28 +1518,54 @@ function App() {
         }
 
         setTasks((currentTasks) =>
-          currentTasks.map((currentTask) =>
-            currentTask.taskId === task.taskId
-              ? {
-                  ...currentTask,
-                  status: result.success ? "completed" : "failed",
-                  outputPreview: result.outputPath || currentTask.outputPreview,
-                  errorLog: result.success ? "" : log
-                }
-              : currentTask
-          )
+          currentTasks.map((currentTask) => {
+            if (currentTask.taskId !== task.taskId) {
+              return currentTask;
+            }
+
+            const status =
+              currentTask.status === "cancelled"
+                ? "cancelled"
+                : resultStatus;
+            return {
+              ...currentTask,
+              backendTaskId: undefined,
+              status,
+              outputPreview:
+                status === "completed" && result.outputPath
+                  ? result.outputPath
+                  : currentTask.outputPreview,
+              errorLog: status === "failed" ? log : ""
+            };
+          })
         );
       } catch (error) {
-        failureCount += 1;
+        const wasCancelled = cancelledTaskIdsRef.current.has(task.taskId);
+        if (wasCancelled) {
+          cancelledCount += 1;
+        } else {
+          failureCount += 1;
+        }
         const message =
-          error instanceof Error ? error.message : "图片转换失败。";
+          typeof error === "string"
+            ? error
+            : error instanceof Error
+              ? error.message
+              : "图片转换失败。";
         setTasks((currentTasks) =>
           currentTasks.map((currentTask) =>
             currentTask.taskId === task.taskId
               ? {
                   ...currentTask,
-                  status: "failed",
-                  errorLog: message
+                  backendTaskId: undefined,
+                  status:
+                    currentTask.status === "cancelled" || wasCancelled
+                      ? "cancelled"
+                      : "failed",
+                  errorLog:
+                    currentTask.status === "cancelled" || wasCancelled
+                      ? ""
+                      : message
                 }
               : currentTask
           )
@@ -1286,13 +1573,13 @@ function App() {
       }
     }
 
-    if (failureCount === 0) {
+    if (failureCount === 0 && cancelledCount === 0) {
       setFolderMessage(
         `已在本机完成 ${successCount} 张图片转换。输出：${outputPaths.join(" | ")}`
       );
     } else {
       setFolderMessage(
-        `图片转换完成：成功 ${successCount}，失败 ${failureCount}。请查看失败任务的错误日志。`
+        `图片转换结束：成功 ${successCount}，失败 ${failureCount}，已取消 ${cancelledCount}。${failureCount > 0 ? "请查看失败任务的错误日志。" : "未保留已取消任务的未完成输出。"}`
       );
     }
   }
@@ -1696,7 +1983,7 @@ function App() {
                       <button
                         type="button"
                         className="small-button"
-                        onClick={() => cancelTask(task.taskId)}
+                        onClick={() => void cancelTask(task.taskId)}
                         disabled={
                           task.status === "completed" ||
                           task.status === "cancelled"
@@ -1716,6 +2003,12 @@ function App() {
                         type="button"
                         className="small-button ghost-button"
                         onClick={() => removeTask(task.taskId)}
+                        disabled={task.status === "converting"}
+                        title={
+                          task.status === "converting"
+                            ? "请先取消运行中的后端任务，再移除。"
+                            : "从队列中移除任务"
+                        }
                       >
                         移除
                       </button>

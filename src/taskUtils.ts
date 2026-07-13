@@ -17,6 +17,7 @@ export type NativePathMetadata = {
 
 export type LocalTask = {
   taskId: string;
+  backendTaskId?: string;
   displayName: string;
   size: number;
   extension: string;

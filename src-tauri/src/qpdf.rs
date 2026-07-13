@@ -1,3 +1,4 @@
+use crate::task_registry::{ChildProcessState, TaskControl};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
@@ -130,6 +131,7 @@ struct QpdfExecutionResult {
     stderr: String,
     exit_code: Option<i32>,
     timed_out: bool,
+    cancelled: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -138,83 +140,188 @@ struct PageRange {
     end: u32,
 }
 
-#[tauri::command]
+#[cfg(test)]
 pub fn qpdf_merge_pdfs(request: QpdfMergeRequest) -> QpdfMergeResult {
-    let output_path = request.output.trim().to_string();
-    execute_qpdf_merge(&request).unwrap_or_else(|message| QpdfMergeResult {
-        success: false,
-        operation: "merge",
-        output_path,
-        output_bytes: 0,
-        stdout: String::new(),
-        stderr: String::new(),
-        exit_code: None,
-        timed_out: false,
-        message,
-    })
+    qpdf_merge_task(request, TaskControl::detached("qpdf-merge"))
 }
 
-#[tauri::command]
+pub(crate) fn qpdf_merge_task(request: QpdfMergeRequest, control: TaskControl) -> QpdfMergeResult {
+    let output_path = request.output.trim().to_string();
+    let mut result =
+        execute_qpdf_merge(&request, &control).unwrap_or_else(|message| QpdfMergeResult {
+            success: false,
+            operation: "merge",
+            output_path,
+            output_bytes: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: None,
+            timed_out: false,
+            message,
+        });
+    if control.is_cancelled() {
+        result.mark_cancelled();
+    }
+    result
+}
+
+#[cfg(test)]
 pub fn qpdf_split_pdf(request: QpdfSplitRequest) -> QpdfSplitResult {
+    qpdf_split_task(request, TaskControl::detached("qpdf-split"))
+}
+
+pub(crate) fn qpdf_split_task(request: QpdfSplitRequest, control: TaskControl) -> QpdfSplitResult {
     let source_path = request.source.trim().to_string();
     let output_directory = request.output_directory.trim().to_string();
-    execute_qpdf_split(&request).unwrap_or_else(|message| QpdfSplitResult {
-        success: false,
-        operation: "split",
-        source_path,
-        output_directory,
-        output_paths: Vec::new(),
-        output_bytes: 0,
-        stdout: String::new(),
-        stderr: String::new(),
-        exit_code: None,
-        timed_out: false,
-        message,
-    })
+    let mut result =
+        execute_qpdf_split(&request, &control).unwrap_or_else(|message| QpdfSplitResult {
+            success: false,
+            operation: "split",
+            source_path,
+            output_directory,
+            output_paths: Vec::new(),
+            output_bytes: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: None,
+            timed_out: false,
+            message,
+        });
+    if control.is_cancelled() {
+        result.mark_cancelled();
+    }
+    result
 }
 
-#[tauri::command]
+#[cfg(test)]
 pub fn qpdf_extract_pages(request: QpdfExtractPagesRequest) -> QpdfExtractResult {
+    qpdf_extract_task(request, TaskControl::detached("qpdf-extract"))
+}
+
+pub(crate) fn qpdf_extract_task(
+    request: QpdfExtractPagesRequest,
+    control: TaskControl,
+) -> QpdfExtractResult {
     let source_path = request.source.trim().to_string();
     let output_path = request.output.trim().to_string();
     let pages = normalize_page_ranges(&request.pages).unwrap_or_default();
 
-    execute_qpdf_extract(&request).unwrap_or_else(|message| QpdfExtractResult {
-        success: false,
-        operation: "extract",
-        source_path,
-        output_path,
-        output_bytes: 0,
-        pages,
-        stdout: String::new(),
-        stderr: String::new(),
-        exit_code: None,
-        timed_out: false,
-        message,
-    })
+    let mut result =
+        execute_qpdf_extract(&request, &control).unwrap_or_else(|message| QpdfExtractResult {
+            success: false,
+            operation: "extract",
+            source_path,
+            output_path,
+            output_bytes: 0,
+            pages,
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: None,
+            timed_out: false,
+            message,
+        });
+    if control.is_cancelled() {
+        result.mark_cancelled();
+    }
+    result
 }
 
-#[tauri::command]
+#[cfg(test)]
 pub fn qpdf_rotate_pages(request: QpdfRotatePagesRequest) -> QpdfRotateResult {
+    qpdf_rotate_task(request, TaskControl::detached("qpdf-rotate"))
+}
+
+pub(crate) fn qpdf_rotate_task(
+    request: QpdfRotatePagesRequest,
+    control: TaskControl,
+) -> QpdfRotateResult {
     let source_path = request.source.trim().to_string();
     let output_path = request.output.trim().to_string();
     let degrees = normalize_rotation_degrees(request.degrees).unwrap_or_default();
     let pages = normalize_optional_page_ranges(&request.pages).unwrap_or_default();
 
-    execute_qpdf_rotate(&request).unwrap_or_else(|message| QpdfRotateResult {
-        success: false,
-        operation: "rotate",
-        source_path,
-        output_path,
-        output_bytes: 0,
-        degrees,
-        pages,
-        stdout: String::new(),
-        stderr: String::new(),
-        exit_code: None,
-        timed_out: false,
-        message,
-    })
+    let mut result =
+        execute_qpdf_rotate(&request, &control).unwrap_or_else(|message| QpdfRotateResult {
+            success: false,
+            operation: "rotate",
+            source_path,
+            output_path,
+            output_bytes: 0,
+            degrees,
+            pages,
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: None,
+            timed_out: false,
+            message,
+        });
+    if control.is_cancelled() {
+        result.mark_cancelled();
+    }
+    result
+}
+
+impl QpdfMergeResult {
+    pub(crate) fn succeeded(&self) -> bool {
+        self.success
+    }
+
+    pub(crate) fn mark_cancelled(&mut self) {
+        if self.success {
+            remove_partial_output(Path::new(&self.output_path));
+        }
+        self.success = false;
+        self.output_bytes = 0;
+        self.message = "PDF merge task was cancelled locally.".to_string();
+    }
+}
+
+impl QpdfSplitResult {
+    pub(crate) fn succeeded(&self) -> bool {
+        self.success
+    }
+
+    pub(crate) fn mark_cancelled(&mut self) {
+        if self.success {
+            for output_path in &self.output_paths {
+                remove_partial_output(Path::new(output_path));
+            }
+        }
+        self.success = false;
+        self.output_bytes = 0;
+        self.output_paths.clear();
+        self.message = "PDF split task was cancelled locally.".to_string();
+    }
+}
+
+impl QpdfExtractResult {
+    pub(crate) fn succeeded(&self) -> bool {
+        self.success
+    }
+
+    pub(crate) fn mark_cancelled(&mut self) {
+        if self.success {
+            remove_partial_output(Path::new(&self.output_path));
+        }
+        self.success = false;
+        self.output_bytes = 0;
+        self.message = "PDF page extraction task was cancelled locally.".to_string();
+    }
+}
+
+impl QpdfRotateResult {
+    pub(crate) fn succeeded(&self) -> bool {
+        self.success
+    }
+
+    pub(crate) fn mark_cancelled(&mut self) {
+        if self.success {
+            remove_partial_output(Path::new(&self.output_path));
+        }
+        self.success = false;
+        self.output_bytes = 0;
+        self.message = "PDF rotate task was cancelled locally.".to_string();
+    }
 }
 
 pub fn detect_qpdf_engine(platform: &str) -> QpdfEngineDetection {
@@ -227,7 +334,14 @@ pub fn detect_qpdf_engine(platform: &str) -> QpdfEngineDetection {
     detect_qpdf_engine_from_candidates(platform, &candidates, run_qpdf_version_smoke_check)
 }
 
-fn execute_qpdf_merge(request: &QpdfMergeRequest) -> Result<QpdfMergeResult, String> {
+fn execute_qpdf_merge(
+    request: &QpdfMergeRequest,
+    control: &TaskControl,
+) -> Result<QpdfMergeResult, String> {
+    if control.is_cancelled() {
+        return Err("PDF merge task was cancelled before execution.".to_string());
+    }
+
     let plan = build_qpdf_merge_arguments(request)?;
     let output_path = PathBuf::from(validate_pdf_path(&request.output, "Output PDF")?);
     validate_merge_source_files(&request.sources)?;
@@ -256,7 +370,23 @@ fn execute_qpdf_merge(request: &QpdfMergeRequest) -> Result<QpdfMergeResult, Str
         &qpdf_path,
         &plan.arguments,
         Duration::from_secs(QPDF_MERGE_TIMEOUT_SECONDS),
+        control,
     )?;
+
+    if execution.cancelled || control.is_cancelled() {
+        remove_partial_output(&output_path);
+        return Ok(QpdfMergeResult {
+            success: false,
+            operation: "merge",
+            output_path: path_to_string(&output_path),
+            output_bytes: 0,
+            stdout: execution.stdout,
+            stderr: execution.stderr,
+            exit_code: execution.exit_code,
+            timed_out: false,
+            message: "PDF merge task was cancelled locally.".to_string(),
+        });
+    }
 
     if execution.timed_out {
         remove_partial_output(&output_path);
@@ -323,7 +453,14 @@ fn execute_qpdf_merge(request: &QpdfMergeRequest) -> Result<QpdfMergeResult, Str
     })
 }
 
-fn execute_qpdf_split(request: &QpdfSplitRequest) -> Result<QpdfSplitResult, String> {
+fn execute_qpdf_split(
+    request: &QpdfSplitRequest,
+    control: &TaskControl,
+) -> Result<QpdfSplitResult, String> {
+    if control.is_cancelled() {
+        return Err("PDF split task was cancelled before execution.".to_string());
+    }
+
     build_qpdf_split_arguments(request)?;
     let source = validate_pdf_path(&request.source, "Source PDF")?;
     let source_path = PathBuf::from(&source);
@@ -355,7 +492,25 @@ fn execute_qpdf_split(request: &QpdfSplitRequest) -> Result<QpdfSplitResult, Str
         &qpdf_path,
         &plan.arguments,
         Duration::from_secs(QPDF_SPLIT_TIMEOUT_SECONDS),
+        control,
     )?;
+
+    if execution.cancelled || control.is_cancelled() {
+        remove_split_outputs(&output_directory, &split_prefix, &existing_outputs);
+        return Ok(QpdfSplitResult {
+            success: false,
+            operation: "split",
+            source_path: path_to_string(&source_path),
+            output_directory: path_to_string(&output_directory),
+            output_paths: Vec::new(),
+            output_bytes: 0,
+            stdout: execution.stdout,
+            stderr: execution.stderr,
+            exit_code: execution.exit_code,
+            timed_out: false,
+            message: "PDF split task was cancelled locally.".to_string(),
+        });
+    }
 
     if execution.timed_out {
         remove_split_outputs(&output_directory, &split_prefix, &existing_outputs);
@@ -461,7 +616,14 @@ fn execute_qpdf_split(request: &QpdfSplitRequest) -> Result<QpdfSplitResult, Str
     })
 }
 
-fn execute_qpdf_extract(request: &QpdfExtractPagesRequest) -> Result<QpdfExtractResult, String> {
+fn execute_qpdf_extract(
+    request: &QpdfExtractPagesRequest,
+    control: &TaskControl,
+) -> Result<QpdfExtractResult, String> {
+    if control.is_cancelled() {
+        return Err("PDF page extraction task was cancelled before execution.".to_string());
+    }
+
     build_qpdf_extract_arguments(request)?;
     let source = validate_pdf_path(&request.source, "Source PDF")?;
     let source_path = PathBuf::from(&source);
@@ -497,7 +659,25 @@ fn execute_qpdf_extract(request: &QpdfExtractPagesRequest) -> Result<QpdfExtract
         &qpdf_path,
         &plan.arguments,
         Duration::from_secs(QPDF_EXTRACT_TIMEOUT_SECONDS),
+        control,
     )?;
+
+    if execution.cancelled || control.is_cancelled() {
+        remove_partial_output(&output_path);
+        return Ok(QpdfExtractResult {
+            success: false,
+            operation: "extract",
+            source_path: path_to_string(&source_path),
+            output_path: path_to_string(&output_path),
+            output_bytes: 0,
+            pages,
+            stdout: execution.stdout,
+            stderr: execution.stderr,
+            exit_code: execution.exit_code,
+            timed_out: false,
+            message: "PDF page extraction task was cancelled locally.".to_string(),
+        });
+    }
 
     if execution.timed_out {
         remove_partial_output(&output_path);
@@ -574,7 +754,14 @@ fn execute_qpdf_extract(request: &QpdfExtractPagesRequest) -> Result<QpdfExtract
     })
 }
 
-fn execute_qpdf_rotate(request: &QpdfRotatePagesRequest) -> Result<QpdfRotateResult, String> {
+fn execute_qpdf_rotate(
+    request: &QpdfRotatePagesRequest,
+    control: &TaskControl,
+) -> Result<QpdfRotateResult, String> {
+    if control.is_cancelled() {
+        return Err("PDF rotate task was cancelled before execution.".to_string());
+    }
+
     build_qpdf_rotate_arguments(request)?;
     let source = validate_pdf_path(&request.source, "Source PDF")?;
     let source_path = PathBuf::from(&source);
@@ -611,7 +798,26 @@ fn execute_qpdf_rotate(request: &QpdfRotatePagesRequest) -> Result<QpdfRotateRes
         &qpdf_path,
         &plan.arguments,
         Duration::from_secs(QPDF_ROTATE_TIMEOUT_SECONDS),
+        control,
     )?;
+
+    if execution.cancelled || control.is_cancelled() {
+        remove_partial_output(&output_path);
+        return Ok(QpdfRotateResult {
+            success: false,
+            operation: "rotate",
+            source_path: path_to_string(&source_path),
+            output_path: path_to_string(&output_path),
+            output_bytes: 0,
+            degrees,
+            pages,
+            stdout: execution.stdout,
+            stderr: execution.stderr,
+            exit_code: execution.exit_code,
+            timed_out: false,
+            message: "PDF rotate task was cancelled locally.".to_string(),
+        });
+    }
 
     if execution.timed_out {
         remove_partial_output(&output_path);
@@ -1360,6 +1566,7 @@ fn run_qpdf_command(
     executable: &Path,
     arguments: &[String],
     timeout: Duration,
+    control: &TaskControl,
 ) -> Result<QpdfExecutionResult, String> {
     let mut child = Command::new(executable)
         .args(arguments)
@@ -1375,20 +1582,36 @@ fn run_qpdf_command(
 
     let stdout_reader = child.stdout.take().map(read_pipe_in_thread);
     let stderr_reader = child.stderr.take().map(read_pipe_in_thread);
+    if !control.attach_child(child)? {
+        return Ok(QpdfExecutionResult {
+            stdout: join_pipe_reader(stdout_reader),
+            stderr: join_pipe_reader(stderr_reader),
+            exit_code: None,
+            timed_out: false,
+            cancelled: true,
+        });
+    }
     let start = Instant::now();
 
-    let (exit_code, timed_out) = loop {
-        if let Some(status) = child
-            .try_wait()
-            .map_err(|error| format!("Unable to inspect qpdf process state: {error}"))?
-        {
-            break (status.code(), false);
+    let (exit_code, timed_out, cancelled) = loop {
+        let process_state = match control.poll_child() {
+            Ok(state) => state,
+            Err(error) => {
+                let _ = control.terminate_child();
+                return Err(format!("Unable to inspect qpdf process state: {error}"));
+            }
+        };
+
+        match process_state {
+            ChildProcessState::Running => {}
+            ChildProcessState::Exited(exit_code) => break (exit_code, false, false),
+            ChildProcessState::Cancelled => break (None, false, true),
         }
 
         if start.elapsed() >= timeout {
-            let _ = child.kill();
-            let _ = child.wait();
-            break (None, true);
+            let _ = control.terminate_child();
+            let cancelled = control.is_cancelled();
+            break (None, !cancelled, cancelled);
         }
 
         thread::sleep(Duration::from_millis(50));
@@ -1399,6 +1622,7 @@ fn run_qpdf_command(
         stderr: join_pipe_reader(stderr_reader),
         exit_code,
         timed_out,
+        cancelled,
     })
 }
 
