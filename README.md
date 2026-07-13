@@ -261,6 +261,7 @@ Packaging should focus on a complete offline installer:
 - Bundle every license, notice, and build notice required by each included sidecar under the installed application's `licenses` resource directory.
 - Resolve engine paths from the installed application bundle.
 - Include all runtime files needed for supported v1 conversions.
+- Run `cargo clippy --all-targets -- -D warnings` from `src-tauri` before release packaging.
 - Run `src-tauri/scripts/verify-engines.mjs` as a required Tauri pre-bundle gate; fail when a current bundled asset, SHA-256 digest, executable permission, or required license file is invalid.
 - Keep current bundled build requirements separate from future planned engines so an unavailable future engine does not fail today's supported package.
 - Run `src-tauri/scripts/prepare-sidecars.mjs` before release packaging.

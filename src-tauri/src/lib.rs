@@ -548,7 +548,7 @@ mod tests {
             .iter()
             .find(|engine| engine.name == "image-engine")
             .expect("image-engine status should be present");
-        assert_eq!(image_engine.required_for_v1, true);
+        assert!(image_engine.required_for_v1);
     }
 
     #[test]

@@ -998,7 +998,7 @@ fn resolve_qpdf_sidecar_path(platform: &str) -> Result<PathBuf, String> {
 
         let detection = detect_qpdf_engine_from_candidates(
             platform,
-            &[candidate.clone()],
+            std::slice::from_ref(&candidate),
             run_qpdf_version_smoke_check,
         );
         if detection.status == "available" {
@@ -2400,10 +2400,11 @@ mod tests {
         fs::set_permissions(&fixture, fs::Permissions::from_mode(0o644))
             .expect("test fixture permissions should be set");
 
-        let detection =
-            detect_qpdf_engine_from_candidates("macos-aarch64", &[fixture.clone()], |_| {
-                panic!("smoke check should not run for a non-executable sidecar")
-            });
+        let detection = detect_qpdf_engine_from_candidates(
+            "macos-aarch64",
+            std::slice::from_ref(&fixture),
+            |_| panic!("smoke check should not run for a non-executable sidecar"),
+        );
 
         assert_eq!(detection.status, "error");
         assert!(detection.message.contains("not executable"));
@@ -2420,10 +2421,11 @@ mod tests {
         fs::set_permissions(&fixture, fs::Permissions::from_mode(0o755))
             .expect("test fixture permissions should be set");
 
-        let detection =
-            detect_qpdf_engine_from_candidates("macos-aarch64", &[fixture.clone()], |_| {
-                Ok("qpdf version 12.3.2".to_string())
-            });
+        let detection = detect_qpdf_engine_from_candidates(
+            "macos-aarch64",
+            std::slice::from_ref(&fixture),
+            |_| Ok("qpdf version 12.3.2".to_string()),
+        );
 
         assert_eq!(detection.status, "available");
         assert!(detection
@@ -2442,10 +2444,11 @@ mod tests {
         fs::set_permissions(&fixture, fs::Permissions::from_mode(0o755))
             .expect("test fixture permissions should be set");
 
-        let detection =
-            detect_qpdf_engine_from_candidates("macos-aarch64", &[fixture.clone()], |_| {
-                Err("bad version output".to_string())
-            });
+        let detection = detect_qpdf_engine_from_candidates(
+            "macos-aarch64",
+            std::slice::from_ref(&fixture),
+            |_| Err("bad version output".to_string()),
+        );
 
         assert_eq!(detection.status, "error");
         assert!(detection.message.contains("smoke check failed"));
@@ -2462,10 +2465,11 @@ mod tests {
         fs::set_permissions(&fixture, fs::Permissions::from_mode(0o755))
             .expect("test fixture permissions should be set");
 
-        let detection =
-            detect_qpdf_engine_from_candidates("macos-aarch64", &[fixture.clone()], |_| {
-                Err("qpdf startup smoke check timed out after 3 seconds".to_string())
-            });
+        let detection = detect_qpdf_engine_from_candidates(
+            "macos-aarch64",
+            std::slice::from_ref(&fixture),
+            |_| Err("qpdf startup smoke check timed out after 3 seconds".to_string()),
+        );
 
         assert_eq!(detection.status, "error");
         assert!(detection.message.contains("timed out after 3 seconds"));

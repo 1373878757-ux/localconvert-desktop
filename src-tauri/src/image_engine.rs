@@ -41,7 +41,7 @@ pub(crate) fn resolve_image_engine_sidecar_path(platform: &str) -> Result<PathBu
 
         let detection = detect_image_engine_from_candidates(
             platform,
-            &[candidate.clone()],
+            std::slice::from_ref(&candidate),
             run_image_engine_smoke_check,
         );
         if detection.status == "available" {
@@ -373,10 +373,11 @@ mod tests {
         let fixture = temp_fixture_path("directory");
         fs::create_dir_all(&fixture).expect("test image-engine directory should be created");
 
-        let detection =
-            detect_image_engine_from_candidates("macos-aarch64", &[fixture.clone()], |_| {
-                panic!("smoke check should not run for a directory sidecar")
-            });
+        let detection = detect_image_engine_from_candidates(
+            "macos-aarch64",
+            std::slice::from_ref(&fixture),
+            |_| panic!("smoke check should not run for a directory sidecar"),
+        );
 
         assert_eq!(detection.status, "error");
         assert!(detection.message.contains("path is not a file"));
@@ -398,10 +399,11 @@ mod tests {
         fs::set_permissions(&fixture, fs::Permissions::from_mode(0o644))
             .expect("fixture permissions should be set");
 
-        let detection =
-            detect_image_engine_from_candidates("macos-aarch64", &[fixture.clone()], |_| {
-                panic!("smoke check should not run for a non-executable sidecar")
-            });
+        let detection = detect_image_engine_from_candidates(
+            "macos-aarch64",
+            std::slice::from_ref(&fixture),
+            |_| panic!("smoke check should not run for a non-executable sidecar"),
+        );
 
         assert_eq!(detection.status, "error");
         assert!(detection.message.contains("not executable"));
@@ -424,10 +426,11 @@ mod tests {
         fs::set_permissions(&fixture, fs::Permissions::from_mode(0o755))
             .expect("fixture permissions should be set");
 
-        let detection =
-            detect_image_engine_from_candidates("macos-aarch64", &[fixture.clone()], |_| {
-                Ok("LocalConvert image-engine 0.2.0-preview.1".to_string())
-            });
+        let detection = detect_image_engine_from_candidates(
+            "macos-aarch64",
+            std::slice::from_ref(&fixture),
+            |_| Ok("LocalConvert image-engine 0.2.0-preview.1".to_string()),
+        );
 
         assert_eq!(detection.status, "available");
         assert!(detection.message.contains("sidecar smoke check passed"));
@@ -450,10 +453,11 @@ mod tests {
         fs::set_permissions(&fixture, fs::Permissions::from_mode(0o755))
             .expect("fixture permissions should be set");
 
-        let detection =
-            detect_image_engine_from_candidates("macos-aarch64", &[fixture.clone()], |_| {
-                Err("bad smoke output".to_string())
-            });
+        let detection = detect_image_engine_from_candidates(
+            "macos-aarch64",
+            std::slice::from_ref(&fixture),
+            |_| Err("bad smoke output".to_string()),
+        );
 
         assert_eq!(detection.status, "error");
         assert!(detection.message.contains("smoke check failed"));
@@ -476,10 +480,11 @@ mod tests {
         fs::set_permissions(&fixture, fs::Permissions::from_mode(0o755))
             .expect("fixture permissions should be set");
 
-        let detection =
-            detect_image_engine_from_candidates("macos-aarch64", &[fixture.clone()], |_| {
-                Err("image-engine startup smoke check timed out after 3 seconds".to_string())
-            });
+        let detection = detect_image_engine_from_candidates(
+            "macos-aarch64",
+            std::slice::from_ref(&fixture),
+            |_| Err("image-engine startup smoke check timed out after 3 seconds".to_string()),
+        );
 
         assert_eq!(detection.status, "error");
         assert!(detection.message.contains("timed out after 3 seconds"));
