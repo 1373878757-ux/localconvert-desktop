@@ -1,6 +1,6 @@
 [package]
 name = "localconvert-desktop"
-version = "0.1.1"
+version = "0.1.2"
 description = "Pure local desktop file conversion app shell."
 authors = ["LocalConvert Desktop"]
 edition = "2021"

@@ -2,33 +2,42 @@
 
 ## Unreleased
 
-### Added
+No changes yet.
 
-- Added Tauri-native file selection and drag-and-drop intake so enabled local operations receive validated absolute source paths.
-- Added a read-only Rust path inspection boundary that records file name, extension, size, and source kind without reading file contents.
-- Added a backend planning boundary for future Preview 0.2 image tools.
-- Added a backend detection boundary for a future bundled image-engine sidecar.
-- Added a first-party Rust `image-engine` macOS Apple Silicon sidecar with real local JPG/JPEG, PNG, and WebP conversion.
+## Preview 0.1.2 - Reliability Release Candidate
+
+LocalConvert Desktop by 田宸宇.
+
+Slogan: 让可能发生在这儿。
+
+Preview 0.1.2 consolidates the reliability, packaging, and release-readiness work completed after Preview 0.1.1. This preparation changes version metadata and release documentation only; it does not alter the existing qpdf or image-engine operation semantics.
+
+### Reliability
+
+- Replaced reliance on browser `File.path` with Tauri-native file selection and drag-and-drop intake that provides validated absolute local paths. The read-only intake boundary records file name, extension, size, and source kind without reading file contents.
+- Moved real qpdf and image-engine jobs behind an asynchronous Rust task registry with stable task IDs, status arbitration, child-process cancellation, and terminal cancelled-state protection.
+- Added task-owned temporary output workspaces, output validation, and atomic no-overwrite publication. Failure and cancellation cleanup is restricted to task-owned paths and cannot delete pre-existing or concurrently created final files.
+- Added three-second per-engine startup self-check timeouts with child-process cleanup, stored diagnostics, and fail-open handoff so the main window still appears after a failed, timed-out, or panicking check.
+- Bundled required qpdf and image-engine license/notice resources and enforced a manifest-driven pre-bundle gate for required assets, SHA-256 digests, executable permissions, and license files.
+- Made `cargo clippy --all-targets -- -D warnings` pass with zero warnings and added it to the documented release validation sequence.
+- Applied supported JPEG and WebP orientation metadata to decoded pixels before encoding, without copying stale orientation metadata that could rotate an output twice.
+- Added a credential-free macOS Developer ID signing, notarization, stapling, sidecar-signing, and Gatekeeper verification workflow without making unsigned local builds depend on Apple credentials.
+
+### Included Since Preview 0.1.1
+
+- Added the planning and detection boundaries for future image operations.
+- Added the first-party Rust `image-engine` macOS Apple Silicon sidecar with real local JPG/JPEG, PNG, and WebP conversion.
 - Added a guarded Simplified Chinese image conversion panel with batch selection and JPG, PNG, or WebP output choices.
 - Added collision-safe `converted` output planning, timeout handling, process cleanup, diagnostics capture, and output image validation.
-- Applied JPEG and WebP orientation metadata to decoded pixels before output encoding without copying stale orientation metadata.
-- Added a Rust backend task registry for real qpdf and image-engine jobs, with async Tauri command boundaries and stable task IDs.
-- Added process-backed cancellation, terminal cancelled-state arbitration, and partial-output cleanup for running local conversions.
-- Added task-owned temporary output workspaces and validated atomic no-overwrite publication for qpdf and image-engine results.
-- Restricted failure and cancellation cleanup to task-owned temporary paths so pre-existing or concurrently created final files are never deleted.
-- Added three-second per-engine startup smoke-check timeouts with child-process cleanup and fail-open main-window handoff.
-- Stored startup engine timeout and failure diagnostics for the existing engine status and error panels.
-- Bundled qpdf and image-engine license/notice resources into the installed application.
-- Added a manifest-driven pre-bundle verification gate for required sidecars, SHA-256 digests, executable permissions, and license files.
-- Added a credential-free macOS Developer ID signing, notarization, stapling, and Gatekeeper verification checklist.
 
 ### Unchanged
 
+- Existing qpdf PDF merge, split, rotate, and page extraction behavior remains unchanged.
+- Existing enabled image conversion behavior remains unchanged by this release-candidate preparation.
 - Browser-only file input remains a metadata-preview fallback and cannot enable real PDF or image operations.
 - AVIF, TIFF/TIF, HEIC, image compression, resizing, metadata removal, and images-to-PDF remain disabled.
 - No LibreOffice, PDFium, libvips, Sharp, ImageMagick, fonts, upload, cloud, server-side conversion, or telemetry is added.
-- Existing qpdf PDF merge, split, rotate, and page extraction behavior is unchanged.
-- Existing qpdf argument plans and operation semantics are unchanged; only execution scheduling and cancellation ownership moved to the backend task boundary.
+- No GitHub Release or release tag is created by this preparation step.
 
 ## Preview 0.1.1 - qpdf macOS Apple Silicon Chinese UI
 
