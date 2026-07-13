@@ -11,6 +11,7 @@
 - Added a first-party Rust `image-engine` macOS Apple Silicon sidecar with real local JPG/JPEG, PNG, and WebP conversion.
 - Added a guarded Simplified Chinese image conversion panel with batch selection and JPG, PNG, or WebP output choices.
 - Added collision-safe `converted` output planning, timeout handling, process cleanup, diagnostics capture, and output image validation.
+- Applied JPEG and WebP orientation metadata to decoded pixels before output encoding without copying stale orientation metadata.
 - Added a Rust backend task registry for real qpdf and image-engine jobs, with async Tauri command boundaries and stable task IDs.
 - Added process-backed cancellation, terminal cancelled-state arbitration, and partial-output cleanup for running local conversions.
 - Added task-owned temporary output workspaces and validated atomic no-overwrite publication for qpdf and image-engine results.

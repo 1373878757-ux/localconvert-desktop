@@ -131,11 +131,11 @@
     },
     {
       "name": "image-engine",
-      "version": "0.2.0-preview.1",
+      "version": "0.2.0-preview.2",
       "platform": "macos-aarch64",
       "type": "sidecar",
       "source": "first-party Rust source: src-tauri/src/bin/image-engine.rs; pinned image crate 0.25.10 codecs",
-      "sha256": "066afe0c921843d88b1107cf355637de3af2d4add364a9342d9a443ea6a416b9",
+      "sha256": "0938eb7d05897a0cfa4934ba6345f059a6d10b94a5aeb36d2f7d3f2c51baf048",
       "license": "First-party LocalConvert Desktop sidecar with third-party Rust codec dependencies; see src-tauri/resources/licenses/image-engine-macos-aarch64-BUILD-NOTICE.txt",
       "destination": "src-tauri/binaries/macos-aarch64/image-engine"
     }

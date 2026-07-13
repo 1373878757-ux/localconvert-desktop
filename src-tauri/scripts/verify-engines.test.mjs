@@ -44,7 +44,7 @@ function createFixture(testContext) {
     },
     {
       name: "image-engine",
-      version: "0.2.0-preview.1",
+      version: "0.2.0-preview.2",
       platform,
       type: "sidecar",
       source: "test fixture",

@@ -55,7 +55,7 @@ The v1 scope should prioritize these conversion groups:
 
 Format support should be expanded only when the local engine path, output validation, and packaging story are reliable.
 
-Preview 0.2 image work begins with real local format conversion between JPG/JPEG, PNG, and WebP on macOS Apple Silicon. A first-party Rust `image-engine` sidecar performs the conversion locally and is enabled only after its startup version and self-check validation pass. The Rust backend validates requests, creates the source-adjacent `converted` folder at execution time, refuses overwrites, launches the sidecar with argument arrays, captures diagnostics, and validates the output before reporting success. AVIF, TIFF/TIF, and HEIC remain planning-only; image compression, resizing, metadata removal, and images-to-PDF are not enabled yet. HEIC remains planned as input only until engine support is confirmed.
+Preview 0.2 image work begins with real local format conversion between JPG/JPEG, PNG, and WebP on macOS Apple Silicon. A first-party Rust `image-engine` sidecar performs the conversion locally and is enabled only after its startup version and self-check validation pass. The Rust backend validates requests, creates the source-adjacent `converted` folder at execution time, refuses overwrites, launches the sidecar with argument arrays, captures diagnostics, and validates the output before reporting success. JPEG and WebP orientation metadata exposed by the current decoder is applied to pixel data before encoding, and stale orientation metadata is not copied to the output. AVIF, TIFF/TIF, and HEIC remain planning-only; image compression, resizing, metadata removal, and images-to-PDF are not enabled yet. HEIC remains planned as input only, and HEIC orientation handling is not supported until a real HEIC-capable engine is enabled.
 
 ## Platform Matrix
 
@@ -298,6 +298,7 @@ Current image conversion checklist:
 
 - Convert PNG to JPG and confirm a non-empty output is written to the source-adjacent `converted` folder.
 - Convert JPG/JPEG to WebP and WebP to PNG.
+- Convert JPEG fixtures with EXIF orientations 1, 6, 3, and 8 and confirm the output dimensions and visible pixel orientation are normalized.
 - Repeat a conversion with a Chinese filename and a path containing spaces.
 - Create an output collision and confirm the backend selects an incremented name instead of overwriting it.
 - Hash or otherwise compare the source image before and after conversion and confirm it is unchanged.

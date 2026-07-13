@@ -1,7 +1,7 @@
 LocalConvert Desktop image-engine sidecar notice
 
 Engine: image-engine
-Version: 0.2.0-preview.1
+Version: 0.2.0-preview.2
 Platform: macos-aarch64
 License: First-party LocalConvert Desktop sidecar with third-party Rust codec dependencies
 
@@ -14,6 +14,8 @@ src-tauri/binaries/macos-aarch64/image-engine
 Build notes:
 This image-engine command-line sidecar is first-party Rust code for LocalConvert Desktop.
 It supports --version, --self-check, and local conversion between JPG/JPEG, PNG, and WebP.
+JPEG and WebP orientation metadata exposed by the decoder is applied before output encoding;
+stale orientation metadata is not copied to the output.
 The conversion command reads only the requested local source image and writes only the requested
 collision-safe output path. It does not contain upload, cloud, server, or telemetry code.
 

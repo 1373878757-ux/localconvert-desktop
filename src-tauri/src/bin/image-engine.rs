@@ -1,5 +1,6 @@
 use image::{
-    DynamicImage, GenericImageView, ImageFormat, ImageReader, Rgb, RgbImage, Rgba, RgbaImage,
+    DynamicImage, GenericImageView, ImageDecoder, ImageFormat, ImageReader, Rgb, RgbImage, Rgba,
+    RgbaImage,
 };
 use std::{
     ffi::{OsStr, OsString},
@@ -8,7 +9,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const IMAGE_ENGINE_VERSION: &str = "0.2.0-preview.1";
+const IMAGE_ENGINE_VERSION: &str = "0.2.0-preview.2";
 const SELF_CHECK_MESSAGE: &str = "LocalConvert image-engine self-check ok";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -229,9 +230,23 @@ fn convert_image(options: &ConvertOptions) -> Result<(), String> {
         ));
     }
 
-    let image = reader
-        .decode()
+    let mut decoder = reader
+        .into_decoder()
         .map_err(|error| format!("Unable to decode input image: {error}"))?;
+    let mut limits = image::Limits::default();
+    limits
+        .reserve(decoder.total_bytes())
+        .map_err(|error| format!("Unable to decode input image: {error}"))?;
+    decoder
+        .set_limits(limits)
+        .map_err(|error| format!("Unable to decode input image: {error}"))?;
+    let orientation = decoder
+        .orientation()
+        .map_err(|error| format!("Unable to read input image orientation: {error}"))?;
+    let mut image = DynamicImage::from_decoder(decoder)
+        .map_err(|error| format!("Unable to decode input image: {error}"))?;
+    image.apply_orientation(orientation);
+
     write_image_create_new(&image, &options.output, options.target_format)
 }
 
@@ -363,7 +378,16 @@ fn run_codec_self_check() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::{codecs::jpeg::JpegEncoder, metadata::Orientation};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[derive(Clone, Copy, Debug)]
+    enum ExpectedColor {
+        Red,
+        Green,
+        Blue,
+        Yellow,
+    }
 
     fn temp_case_dir(name: &str) -> PathBuf {
         let unique = SystemTime::now()
@@ -373,6 +397,144 @@ mod tests {
         std::env::temp_dir()
             .join(format!("localconvert-image-engine-cli-{name}"))
             .join(unique.to_string())
+    }
+
+    fn jpeg_exif_orientation_segment(orientation: u8) -> Vec<u8> {
+        assert!((1..=8).contains(&orientation));
+
+        let tiff_data = [
+            0x4d,
+            0x4d,
+            0x00,
+            0x2a, // Big-endian TIFF header.
+            0x00,
+            0x00,
+            0x00,
+            0x08, // Offset to the first IFD.
+            0x00,
+            0x01, // One IFD entry.
+            0x01,
+            0x12, // Orientation tag.
+            0x00,
+            0x03, // SHORT value.
+            0x00,
+            0x00,
+            0x00,
+            0x01, // One value.
+            0x00,
+            orientation,
+            0x00,
+            0x00, // Orientation value and padding.
+            0x00,
+            0x00,
+            0x00,
+            0x00, // No next IFD.
+        ];
+        let mut payload = b"Exif\0\0".to_vec();
+        payload.extend_from_slice(&tiff_data);
+        let segment_length =
+            u16::try_from(payload.len() + 2).expect("test EXIF segment should fit in JPEG APP1");
+
+        let mut segment = vec![0xff, 0xe1];
+        segment.extend_from_slice(&segment_length.to_be_bytes());
+        segment.extend_from_slice(&payload);
+        segment
+    }
+
+    fn write_oriented_jpeg(path: &Path, orientation: u8) {
+        let mut pixels = RgbImage::new(32, 24);
+        for (x, y, pixel) in pixels.enumerate_pixels_mut() {
+            *pixel = match (x < 16, y < 12) {
+                (true, true) => Rgb([255, 0, 0]),
+                (false, true) => Rgb([0, 255, 0]),
+                (true, false) => Rgb([0, 0, 255]),
+                (false, false) => Rgb([255, 255, 0]),
+            };
+        }
+
+        let mut jpeg = Vec::new();
+        JpegEncoder::new_with_quality(&mut jpeg, 100)
+            .encode_image(&DynamicImage::ImageRgb8(pixels))
+            .expect("test JPEG should encode");
+        assert!(jpeg.starts_with(&[0xff, 0xd8]));
+
+        let mut oriented_jpeg = Vec::with_capacity(jpeg.len() + 36);
+        oriented_jpeg.extend_from_slice(&jpeg[..2]);
+        oriented_jpeg.extend_from_slice(&jpeg_exif_orientation_segment(orientation));
+        oriented_jpeg.extend_from_slice(&jpeg[2..]);
+        fs::write(path, oriented_jpeg).expect("oriented test JPEG should be written");
+    }
+
+    fn read_orientation(path: &Path) -> Orientation {
+        let reader = ImageReader::open(path)
+            .expect("test image should open")
+            .with_guessed_format()
+            .expect("test image format should be detected");
+        let mut decoder = reader
+            .into_decoder()
+            .expect("test decoder should initialize");
+        decoder
+            .orientation()
+            .expect("test image orientation should be readable")
+    }
+
+    fn assert_corner_color(pixel: Rgba<u8>, expected: ExpectedColor) {
+        let [red, green, blue, _alpha] = pixel.0;
+        let matches = match expected {
+            ExpectedColor::Red => red > 180 && green < 80 && blue < 80,
+            ExpectedColor::Green => green > 180 && red < 80 && blue < 80,
+            ExpectedColor::Blue => blue > 180 && red < 80 && green < 80,
+            ExpectedColor::Yellow => red > 180 && green > 180 && blue < 80,
+        };
+        assert!(
+            matches,
+            "expected {expected:?}, found RGB({red}, {green}, {blue})"
+        );
+    }
+
+    fn assert_jpeg_orientation_conversion(
+        exif_orientation: u8,
+        target_format: TargetFormat,
+        expected_dimensions: (u32, u32),
+        expected_corners: [ExpectedColor; 4],
+    ) {
+        let case_dir = temp_case_dir(&format!("jpeg-orientation-{exif_orientation}"));
+        let converted_dir = case_dir.join("converted");
+        fs::create_dir_all(&converted_dir).expect("converted test directory should be created");
+        let source = case_dir.join("phone photo.jpg");
+        let output = converted_dir.join(format!("phone photo.{}", target_format.extension()));
+        write_oriented_jpeg(&source, exif_orientation);
+        let source_before = fs::read(&source).expect("source bytes should be readable");
+        let expected_source_orientation =
+            Orientation::from_exif(exif_orientation).expect("test orientation should be valid");
+        assert_eq!(read_orientation(&source), expected_source_orientation);
+
+        convert_image(&ConvertOptions {
+            input: source.clone(),
+            output: output.clone(),
+            target_format,
+        })
+        .expect("oriented JPEG conversion should succeed");
+
+        let output_image = image::open(&output).expect("converted image should decode");
+        assert_eq!(output_image.dimensions(), expected_dimensions);
+        let (width, height) = expected_dimensions;
+        let sample_points = [
+            (2, 2),
+            (width - 3, 2),
+            (2, height - 3),
+            (width - 3, height - 3),
+        ];
+        for ((x, y), expected) in sample_points.into_iter().zip(expected_corners) {
+            assert_corner_color(output_image.get_pixel(x, y), expected);
+        }
+        assert_eq!(read_orientation(&output), Orientation::NoTransforms);
+        assert_eq!(
+            fs::read(&source).expect("source bytes should remain readable"),
+            source_before
+        );
+
+        let _ = fs::remove_dir_all(case_dir);
     }
 
     #[test]
@@ -453,6 +615,66 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(case_dir);
+    }
+
+    #[test]
+    fn preserves_normal_jpeg_orientation() {
+        assert_jpeg_orientation_conversion(
+            1,
+            TargetFormat::Png,
+            (32, 24),
+            [
+                ExpectedColor::Red,
+                ExpectedColor::Green,
+                ExpectedColor::Blue,
+                ExpectedColor::Yellow,
+            ],
+        );
+    }
+
+    #[test]
+    fn applies_jpeg_rotate_90_orientation_before_webp_encoding() {
+        assert_jpeg_orientation_conversion(
+            6,
+            TargetFormat::WebP,
+            (24, 32),
+            [
+                ExpectedColor::Blue,
+                ExpectedColor::Red,
+                ExpectedColor::Yellow,
+                ExpectedColor::Green,
+            ],
+        );
+    }
+
+    #[test]
+    fn applies_jpeg_rotate_180_orientation() {
+        assert_jpeg_orientation_conversion(
+            3,
+            TargetFormat::Png,
+            (32, 24),
+            [
+                ExpectedColor::Yellow,
+                ExpectedColor::Blue,
+                ExpectedColor::Green,
+                ExpectedColor::Red,
+            ],
+        );
+    }
+
+    #[test]
+    fn applies_jpeg_rotate_270_orientation() {
+        assert_jpeg_orientation_conversion(
+            8,
+            TargetFormat::Png,
+            (24, 32),
+            [
+                ExpectedColor::Green,
+                ExpectedColor::Yellow,
+                ExpectedColor::Red,
+                ExpectedColor::Blue,
+            ],
+        );
     }
 
     #[test]
