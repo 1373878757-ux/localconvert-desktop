@@ -17,6 +17,7 @@ mod native_intake;
 mod output_finalize;
 mod qpdf;
 mod task_registry;
+mod timed_process;
 
 const DEFAULT_OUTPUT_STRATEGY: &str = "converted-folder-next-to-source";
 const COLLISION_STRATEGY_EXPLANATION: &str =
@@ -72,6 +73,11 @@ impl StartupState {
         status.error = error;
     }
 
+    fn complete_with_self_check(&self, self_check: EngineSelfCheck) {
+        let error = startup_engine_error_summary(&self_check);
+        self.complete(Some(self_check), error);
+    }
+
     fn record_error(&self, message: String) {
         let mut status = self
             .status
@@ -81,6 +87,30 @@ impl StartupState {
             Some(existing) => format!("{existing}\n{message}"),
             None => message,
         });
+    }
+}
+
+fn startup_engine_error_summary(self_check: &EngineSelfCheck) -> Option<String> {
+    let errors = self_check
+        .engines
+        .iter()
+        .filter(|engine| engine.status == "error")
+        .map(|engine| format!("{}: {}", engine.name, engine.message))
+        .collect::<Vec<_>>();
+
+    (!errors.is_empty()).then(|| errors.join("\n"))
+}
+
+fn complete_startup_check_result(
+    startup_state: &StartupState,
+    self_check_result: thread::Result<EngineSelfCheck>,
+) {
+    match self_check_result {
+        Ok(self_check) => startup_state.complete_with_self_check(self_check),
+        Err(_) => startup_state.complete(
+            None,
+            Some("Startup initialization failed during engine self-check.".to_string()),
+        ),
     }
 }
 
@@ -356,14 +386,7 @@ pub fn run() {
 fn run_startup_sequence(startup_state: StartupState, app_handle: tauri::AppHandle) {
     let started_at = Instant::now();
     let self_check_result = std::panic::catch_unwind(build_engine_self_check);
-
-    match self_check_result {
-        Ok(self_check) => startup_state.complete(Some(self_check), None),
-        Err(_) => startup_state.complete(
-            None,
-            Some("Startup initialization failed during engine self-check.".to_string()),
-        ),
-    }
+    complete_startup_check_result(&startup_state, self_check_result);
 
     if let Some(remaining) = MIN_SPLASH_DISPLAY_TIME.checked_sub(started_at.elapsed()) {
         thread::sleep(remaining);
@@ -526,5 +549,53 @@ mod tests {
             .find(|engine| engine.name == "image-engine")
             .expect("image-engine status should be present");
         assert_eq!(image_engine.required_for_v1, true);
+    }
+
+    #[test]
+    fn startup_state_stores_engine_timeout_error() {
+        let startup_state = StartupState::default();
+        let timeout_message = "qpdf startup smoke check timed out after 3 seconds";
+        let self_check = EngineSelfCheck {
+            platform: "macos-aarch64".to_string(),
+            full_edition: true,
+            conversion_enabled: false,
+            engines: vec![EngineStatus {
+                name: "qpdf",
+                status: "error",
+                required_for_v1: true,
+                message: timeout_message.to_string(),
+            }],
+        };
+
+        complete_startup_check_result(&startup_state, Ok(self_check));
+        let snapshot = startup_state.snapshot();
+
+        assert!(snapshot.completed);
+        assert!(snapshot
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains(timeout_message)));
+        let stored_check = snapshot
+            .self_check
+            .expect("timed-out engine result should remain available to the UI");
+        assert_eq!(stored_check.engines[0].status, "error");
+        assert_eq!(stored_check.engines[0].message, timeout_message);
+    }
+
+    #[test]
+    fn startup_state_completes_after_panicking_engine_check_result() {
+        let startup_state = StartupState::default();
+        let panic_result: thread::Result<EngineSelfCheck> =
+            Err(Box::new("engine self-check panic"));
+
+        complete_startup_check_result(&startup_state, panic_result);
+        let snapshot = startup_state.snapshot();
+
+        assert!(snapshot.completed);
+        assert!(snapshot.self_check.is_none());
+        assert_eq!(
+            snapshot.error.as_deref(),
+            Some("Startup initialization failed during engine self-check.")
+        );
     }
 }

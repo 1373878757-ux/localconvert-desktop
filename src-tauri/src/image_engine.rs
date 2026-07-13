@@ -1,7 +1,8 @@
+use crate::timed_process::{run_command_with_timeout, ENGINE_SELF_CHECK_TIMEOUT};
 use std::{
     fs,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    time::{Duration, Instant},
 };
 
 #[cfg(unix)]
@@ -146,16 +147,12 @@ where
 }
 
 fn run_image_engine_smoke_check(path: &Path) -> Result<String, String> {
-    let version_output = Command::new(path)
-        .arg("--version")
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|error| {
-            format!(
-                "unable to run image-engine --version for {}: {error}",
-                path_to_string(path)
-            )
-        })?;
+    let started_at = Instant::now();
+    let version_output = run_image_engine_smoke_command(
+        path,
+        "--version",
+        remaining_self_check_budget(started_at)?,
+    )?;
     let version_line = validated_image_engine_output(
         &version_output,
         "--version",
@@ -163,16 +160,11 @@ fn run_image_engine_smoke_check(path: &Path) -> Result<String, String> {
         "image-engine --version did not return the expected version line",
     )?;
 
-    let self_check_output = Command::new(path)
-        .arg("--self-check")
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|error| {
-            format!(
-                "unable to run image-engine --self-check for {}: {error}",
-                path_to_string(path)
-            )
-        })?;
+    let self_check_output = run_image_engine_smoke_command(
+        path,
+        "--self-check",
+        remaining_self_check_budget(started_at)?,
+    )?;
     let _self_check_line = validated_image_engine_output(
         &self_check_output,
         "--self-check",
@@ -181,6 +173,37 @@ fn run_image_engine_smoke_check(path: &Path) -> Result<String, String> {
     )?;
 
     Ok(version_line)
+}
+
+fn remaining_self_check_budget(started_at: Instant) -> Result<Duration, String> {
+    ENGINE_SELF_CHECK_TIMEOUT
+        .checked_sub(started_at.elapsed())
+        .filter(|remaining| !remaining.is_zero())
+        .ok_or_else(image_engine_timeout_message)
+}
+
+fn run_image_engine_smoke_command(
+    path: &Path,
+    argument: &str,
+    timeout: Duration,
+) -> Result<std::process::Output, String> {
+    run_command_with_timeout(path, &[argument], timeout).map_err(|error| {
+        if error.is_timeout() {
+            image_engine_timeout_message()
+        } else {
+            format!(
+                "unable to run image-engine {argument} for {}: {error}",
+                path_to_string(path)
+            )
+        }
+    })
+}
+
+fn image_engine_timeout_message() -> String {
+    format!(
+        "image-engine startup smoke check timed out after {} seconds",
+        ENGINE_SELF_CHECK_TIMEOUT.as_secs()
+    )
 }
 
 fn validated_image_engine_output<F>(
@@ -434,6 +457,32 @@ mod tests {
 
         assert_eq!(detection.status, "error");
         assert!(detection.message.contains("smoke check failed"));
+
+        let cleanup_root = fixture
+            .ancestors()
+            .nth(2)
+            .expect("fixture should have a cleanup root");
+        let _ = fs::remove_dir_all(cleanup_root);
+    }
+
+    #[test]
+    fn smoke_timeout_returns_visible_engine_error() {
+        let fixture = temp_fixture_path("smoke-timeout");
+        fs::create_dir_all(fixture.parent().expect("fixture should have a parent"))
+            .expect("fixture parent should be created");
+        File::create(&fixture).expect("test image-engine fixture should be created");
+
+        #[cfg(unix)]
+        fs::set_permissions(&fixture, fs::Permissions::from_mode(0o755))
+            .expect("fixture permissions should be set");
+
+        let detection =
+            detect_image_engine_from_candidates("macos-aarch64", &[fixture.clone()], |_| {
+                Err("image-engine startup smoke check timed out after 3 seconds".to_string())
+            });
+
+        assert_eq!(detection.status, "error");
+        assert!(detection.message.contains("timed out after 3 seconds"));
 
         let cleanup_root = fixture
             .ancestors()

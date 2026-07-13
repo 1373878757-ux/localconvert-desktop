@@ -15,6 +15,8 @@
 - Added process-backed cancellation, terminal cancelled-state arbitration, and partial-output cleanup for running local conversions.
 - Added task-owned temporary output workspaces and validated atomic no-overwrite publication for qpdf and image-engine results.
 - Restricted failure and cancellation cleanup to task-owned temporary paths so pre-existing or concurrently created final files are never deleted.
+- Added three-second per-engine startup smoke-check timeouts with child-process cleanup and fail-open main-window handoff.
+- Stored startup engine timeout and failure diagnostics for the existing engine status and error panels.
 
 ### Unchanged
 

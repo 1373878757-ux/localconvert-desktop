@@ -1,6 +1,7 @@
 use crate::{
     output_finalize::{FinalizedOutput, TaskOutputWorkspace},
     task_registry::{ChildProcessState, TaskCommitError, TaskControl},
+    timed_process::{run_command_with_timeout, ENGINE_SELF_CHECK_TIMEOUT},
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -946,14 +947,19 @@ where
 }
 
 fn run_qpdf_version_smoke_check(path: &Path) -> Result<String, String> {
-    let output = Command::new(path)
-        .arg("--version")
-        .output()
+    let output = run_command_with_timeout(path, &["--version"], ENGINE_SELF_CHECK_TIMEOUT)
         .map_err(|error| {
-            format!(
-                "unable to run qpdf --version for {}: {error}",
-                path_to_string(path)
-            )
+            if error.is_timeout() {
+                format!(
+                    "qpdf startup smoke check timed out after {} seconds",
+                    ENGINE_SELF_CHECK_TIMEOUT.as_secs()
+                )
+            } else {
+                format!(
+                    "unable to run qpdf --version for {}: {error}",
+                    path_to_string(path)
+                )
+            }
         })?;
 
     if !output.status.success() {
@@ -2443,6 +2449,26 @@ mod tests {
 
         assert_eq!(detection.status, "error");
         assert!(detection.message.contains("smoke check failed"));
+
+        let _ = fs::remove_file(fixture);
+    }
+
+    #[test]
+    fn smoke_timeout_returns_visible_engine_error() {
+        let fixture = temp_fixture_path("smoke-timeout");
+        File::create(&fixture).expect("test qpdf fixture should be created");
+
+        #[cfg(unix)]
+        fs::set_permissions(&fixture, fs::Permissions::from_mode(0o755))
+            .expect("test fixture permissions should be set");
+
+        let detection =
+            detect_qpdf_engine_from_candidates("macos-aarch64", &[fixture.clone()], |_| {
+                Err("qpdf startup smoke check timed out after 3 seconds".to_string())
+            });
+
+        assert_eq!(detection.status, "error");
+        assert!(detection.message.contains("timed out after 3 seconds"));
 
         let _ = fs::remove_file(fixture);
     }
