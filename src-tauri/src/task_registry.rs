@@ -40,6 +40,12 @@ pub(crate) enum ChildProcessState {
     Cancelled,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum TaskCommitError {
+    Cancelled,
+    Finalize(String),
+}
+
 struct BackendTaskEntry {
     operation: String,
     status: Mutex<BackendTaskStatus>,
@@ -134,7 +140,10 @@ impl BackendTaskRegistry {
             .lock()
             .map_err(|_| "Backend task status lock is unavailable.".to_string())?;
 
-        if *status != BackendTaskStatus::Cancelled {
+        if !matches!(
+            *status,
+            BackendTaskStatus::Cancelled | BackendTaskStatus::Completed
+        ) {
             *status = if succeeded {
                 BackendTaskStatus::Completed
             } else {
@@ -294,6 +303,31 @@ impl TaskControl {
 
     pub(crate) fn is_cancelled(&self) -> bool {
         self.entry.cancel_requested.load(Ordering::SeqCst)
+    }
+
+    pub(crate) fn commit_outputs<T, F>(&self, finalize: F) -> Result<T, TaskCommitError>
+    where
+        F: FnOnce() -> Result<T, String>,
+    {
+        let mut status = self.entry.status.lock().map_err(|_| {
+            TaskCommitError::Finalize(
+                "Backend task status lock is unavailable during output finalization.".to_string(),
+            )
+        })?;
+
+        if *status == BackendTaskStatus::Cancelled || self.is_cancelled() {
+            return Err(TaskCommitError::Cancelled);
+        }
+        if *status != BackendTaskStatus::Running {
+            return Err(TaskCommitError::Finalize(format!(
+                "Backend task cannot finalize outputs from status {}.",
+                status.as_str()
+            )));
+        }
+
+        let result = finalize().map_err(TaskCommitError::Finalize)?;
+        *status = BackendTaskStatus::Completed;
+        Ok(result)
     }
 
     pub(crate) fn attach_child(&self, mut child: Child) -> Result<bool, String> {
@@ -520,6 +554,51 @@ mod tests {
             registry.status("task-race"),
             Ok(BackendTaskStatus::Cancelled)
         );
+    }
+
+    #[test]
+    fn output_commit_becomes_terminal_before_late_cancellation() {
+        let registry = BackendTaskRegistry::default();
+        let control = registry
+            .register("task-commit", "qpdf-merge")
+            .expect("task should register");
+        assert_eq!(control.mark_running(), Ok(true));
+
+        let value = control
+            .commit_outputs(|| Ok(42))
+            .expect("output commit should succeed");
+        let cancellation = registry
+            .cancel("task-commit")
+            .expect("late cancellation should return a terminal response");
+
+        assert_eq!(value, 42);
+        assert!(!cancellation.cancellation_requested);
+        assert_eq!(cancellation.status, "completed");
+        assert_eq!(
+            registry.finish("task-commit", true),
+            Ok(BackendTaskStatus::Completed)
+        );
+    }
+
+    #[test]
+    fn cancellation_prevents_output_commit_callback() {
+        let registry = BackendTaskRegistry::default();
+        let control = registry
+            .register("task-cancel-before-commit", "image-convert")
+            .expect("task should register");
+        assert_eq!(control.mark_running(), Ok(true));
+        registry
+            .cancel("task-cancel-before-commit")
+            .expect("task should cancel");
+
+        let mut callback_ran = false;
+        let result = control.commit_outputs(|| {
+            callback_ran = true;
+            Ok(())
+        });
+
+        assert_eq!(result, Err(TaskCommitError::Cancelled));
+        assert!(!callback_ran);
     }
 
     #[cfg(unix)]

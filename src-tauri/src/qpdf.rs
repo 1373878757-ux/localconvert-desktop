@@ -1,7 +1,9 @@
-use crate::task_registry::{ChildProcessState, TaskControl};
+use crate::{
+    output_finalize::{FinalizedOutput, TaskOutputWorkspace},
+    task_registry::{ChildProcessState, TaskCommitError, TaskControl},
+};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashSet,
     fs,
     io::Read,
     path::{Path, PathBuf},
@@ -267,9 +269,6 @@ impl QpdfMergeResult {
     }
 
     pub(crate) fn mark_cancelled(&mut self) {
-        if self.success {
-            remove_partial_output(Path::new(&self.output_path));
-        }
         self.success = false;
         self.output_bytes = 0;
         self.message = "PDF merge task was cancelled locally.".to_string();
@@ -282,14 +281,7 @@ impl QpdfSplitResult {
     }
 
     pub(crate) fn mark_cancelled(&mut self) {
-        if self.success {
-            for output_path in &self.output_paths {
-                remove_partial_output(Path::new(output_path));
-            }
-        }
         self.success = false;
-        self.output_bytes = 0;
-        self.output_paths.clear();
         self.message = "PDF split task was cancelled locally.".to_string();
     }
 }
@@ -300,9 +292,6 @@ impl QpdfExtractResult {
     }
 
     pub(crate) fn mark_cancelled(&mut self) {
-        if self.success {
-            remove_partial_output(Path::new(&self.output_path));
-        }
         self.success = false;
         self.output_bytes = 0;
         self.message = "PDF page extraction task was cancelled locally.".to_string();
@@ -315,9 +304,6 @@ impl QpdfRotateResult {
     }
 
     pub(crate) fn mark_cancelled(&mut self) {
-        if self.success {
-            remove_partial_output(Path::new(&self.output_path));
-        }
         self.success = false;
         self.output_bytes = 0;
         self.message = "PDF rotate task was cancelled locally.".to_string();
@@ -342,7 +328,7 @@ fn execute_qpdf_merge(
         return Err("PDF merge task was cancelled before execution.".to_string());
     }
 
-    let plan = build_qpdf_merge_arguments(request)?;
+    build_qpdf_merge_arguments(request)?;
     let output_path = PathBuf::from(validate_pdf_path(&request.output, "Output PDF")?);
     validate_merge_source_files(&request.sources)?;
     validate_merge_output_path(&output_path)?;
@@ -352,19 +338,9 @@ fn execute_qpdf_merge(
     let output_parent = output_path
         .parent()
         .ok_or_else(|| "Output PDF must have a converted output folder.".to_string())?;
-    fs::create_dir_all(output_parent).map_err(|error| {
-        format!(
-            "Unable to create converted output folder {}: {error}",
-            path_to_string(output_parent)
-        )
-    })?;
-
-    if output_path.exists() {
-        return Err(format!(
-            "Output PDF already exists and will not be overwritten: {}",
-            path_to_string(&output_path)
-        ));
-    }
+    let workspace = TaskOutputWorkspace::create(output_parent, control.task_id())?;
+    let temp_output = workspace.temp_file("merged.pdf")?;
+    let plan = build_qpdf_merge_arguments_for_output(&request.sources, &temp_output)?;
 
     let execution = run_qpdf_command(
         &qpdf_path,
@@ -374,7 +350,6 @@ fn execute_qpdf_merge(
     )?;
 
     if execution.cancelled || control.is_cancelled() {
-        remove_partial_output(&output_path);
         return Ok(QpdfMergeResult {
             success: false,
             operation: "merge",
@@ -389,7 +364,6 @@ fn execute_qpdf_merge(
     }
 
     if execution.timed_out {
-        remove_partial_output(&output_path);
         return Ok(QpdfMergeResult {
             success: false,
             operation: "merge",
@@ -404,7 +378,6 @@ fn execute_qpdf_merge(
     }
 
     if execution.exit_code != Some(0) {
-        remove_partial_output(&output_path);
         return Ok(QpdfMergeResult {
             success: false,
             operation: "merge",
@@ -418,33 +391,42 @@ fn execute_qpdf_merge(
         });
     }
 
-    let output_metadata = fs::metadata(&output_path).map_err(|error| {
-        format!(
-            "qpdf reported success, but output PDF is missing: {}: {error}",
-            path_to_string(&output_path)
-        )
-    })?;
-
-    if output_metadata.len() == 0 {
-        remove_partial_output(&output_path);
-        return Ok(QpdfMergeResult {
-            success: false,
-            operation: "merge",
-            output_path: path_to_string(&output_path),
-            output_bytes: 0,
-            stdout: execution.stdout,
-            stderr: execution.stderr,
-            exit_code: execution.exit_code,
-            timed_out: false,
-            message: "qpdf reported success, but output PDF is empty.".to_string(),
-        });
-    }
+    let finalized =
+        match control.commit_outputs(|| workspace.finalize_file(&temp_output, &output_path)) {
+            Ok(finalized) => finalized,
+            Err(TaskCommitError::Cancelled) => {
+                return Ok(QpdfMergeResult {
+                    success: false,
+                    operation: "merge",
+                    output_path: path_to_string(&output_path),
+                    output_bytes: 0,
+                    stdout: execution.stdout,
+                    stderr: execution.stderr,
+                    exit_code: execution.exit_code,
+                    timed_out: false,
+                    message: "PDF merge task was cancelled before output finalization.".to_string(),
+                });
+            }
+            Err(TaskCommitError::Finalize(message)) => {
+                return Ok(QpdfMergeResult {
+                    success: false,
+                    operation: "merge",
+                    output_path: path_to_string(&output_path),
+                    output_bytes: 0,
+                    stdout: execution.stdout,
+                    stderr: execution.stderr,
+                    exit_code: execution.exit_code,
+                    timed_out: false,
+                    message,
+                });
+            }
+        };
 
     Ok(QpdfMergeResult {
         success: true,
         operation: "merge",
         output_path: path_to_string(&output_path),
-        output_bytes: output_metadata.len(),
+        output_bytes: finalized.bytes,
         stdout: execution.stdout,
         stderr: execution.stderr,
         exit_code: execution.exit_code,
@@ -474,20 +456,11 @@ fn execute_qpdf_split(
     validate_split_output_location(&source_path, &output_directory)?;
 
     let split_prefix = collision_safe_split_prefix(&output_directory, &filename_prefix)?;
-    let output_pattern = split_output_pattern(&output_directory, &split_prefix);
-    let plan = build_qpdf_split_arguments_for_pattern(&source, &output_pattern)?;
-
     let platform = current_platform_key();
     let qpdf_path = resolve_qpdf_sidecar_path(platform)?;
-
-    fs::create_dir_all(&output_directory).map_err(|error| {
-        format!(
-            "Unable to create converted output folder {}: {error}",
-            path_to_string(&output_directory)
-        )
-    })?;
-
-    let existing_outputs = list_directory_filenames(&output_directory)?;
+    let workspace = TaskOutputWorkspace::create(&output_directory, control.task_id())?;
+    let temp_pattern = workspace.temp_file(&format!("{split_prefix}-%d.pdf"))?;
+    let plan = build_qpdf_split_arguments_for_pattern(&source, &temp_pattern)?;
     let execution = run_qpdf_command(
         &qpdf_path,
         &plan.arguments,
@@ -496,7 +469,6 @@ fn execute_qpdf_split(
     )?;
 
     if execution.cancelled || control.is_cancelled() {
-        remove_split_outputs(&output_directory, &split_prefix, &existing_outputs);
         return Ok(QpdfSplitResult {
             success: false,
             operation: "split",
@@ -513,7 +485,6 @@ fn execute_qpdf_split(
     }
 
     if execution.timed_out {
-        remove_split_outputs(&output_directory, &split_prefix, &existing_outputs);
         return Ok(QpdfSplitResult {
             success: false,
             operation: "split",
@@ -530,7 +501,6 @@ fn execute_qpdf_split(
     }
 
     if execution.exit_code != Some(0) {
-        remove_split_outputs(&output_directory, &split_prefix, &existing_outputs);
         return Ok(QpdfSplitResult {
             success: false,
             operation: "split",
@@ -546,11 +516,9 @@ fn execute_qpdf_split(
         });
     }
 
-    let split_outputs =
-        collect_new_split_outputs(&output_directory, &split_prefix, &existing_outputs);
+    let split_outputs = collect_task_split_outputs(workspace.root(), &split_prefix);
 
     if split_outputs.is_empty() {
-        remove_split_outputs(&output_directory, &split_prefix, &existing_outputs);
         return Ok(QpdfSplitResult {
             success: false,
             operation: "split",
@@ -566,17 +534,25 @@ fn execute_qpdf_split(
         });
     }
 
-    let mut output_bytes = 0;
-    for output in &split_outputs {
-        let metadata = fs::metadata(output).map_err(|error| {
-            format!(
-                "qpdf reported success, but split output could not be inspected: {}: {error}",
-                path_to_string(output)
-            )
-        })?;
+    let mappings = split_outputs
+        .iter()
+        .map(|temp_output| {
+            let file_name = temp_output
+                .file_name()
+                .ok_or_else(|| "Split output must have a filename.".to_string())?;
+            Ok((temp_output.clone(), output_directory.join(file_name)))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
 
-        if metadata.len() == 0 {
-            remove_split_outputs(&output_directory, &split_prefix, &existing_outputs);
+    let mut published_on_failure: Vec<FinalizedOutput> = Vec::new();
+    let finalized = match control.commit_outputs(|| {
+        workspace.finalize_files(&mappings).map_err(|error| {
+            published_on_failure = error.published;
+            error.message
+        })
+    }) {
+        Ok(finalized) => finalized,
+        Err(TaskCommitError::Cancelled) => {
             return Ok(QpdfSplitResult {
                 success: false,
                 operation: "split",
@@ -588,24 +564,49 @@ fn execute_qpdf_split(
                 stderr: execution.stderr,
                 exit_code: execution.exit_code,
                 timed_out: false,
-                message: format!(
-                    "qpdf reported success, but split output is empty: {}",
-                    path_to_string(output)
-                ),
+                message: "PDF split task was cancelled before output finalization.".to_string(),
             });
         }
+        Err(TaskCommitError::Finalize(message)) => {
+            let output_bytes = published_on_failure.iter().map(|output| output.bytes).sum();
+            let output_paths = published_on_failure
+                .iter()
+                .map(|output| path_to_string(&output.path))
+                .collect::<Vec<_>>();
+            let message = if output_paths.is_empty() {
+                message
+            } else {
+                format!(
+                    "{message} {} output(s) were already finalized and were not deleted.",
+                    output_paths.len()
+                )
+            };
+            return Ok(QpdfSplitResult {
+                success: false,
+                operation: "split",
+                source_path: path_to_string(&source_path),
+                output_directory: path_to_string(&output_directory),
+                output_paths,
+                output_bytes,
+                stdout: execution.stdout,
+                stderr: execution.stderr,
+                exit_code: execution.exit_code,
+                timed_out: false,
+                message,
+            });
+        }
+    };
 
-        output_bytes += metadata.len();
-    }
+    let output_bytes = finalized.iter().map(|output| output.bytes).sum();
 
     Ok(QpdfSplitResult {
         success: true,
         operation: "split",
         source_path: path_to_string(&source_path),
         output_directory: path_to_string(&output_directory),
-        output_paths: split_outputs
+        output_paths: finalized
             .iter()
-            .map(|output| path_to_string(output))
+            .map(|output| path_to_string(&output.path))
             .collect(),
         output_bytes,
         stdout: execution.stdout,
@@ -634,26 +635,14 @@ fn execute_qpdf_extract(
     validate_single_pdf_output_location(&source_path, &requested_output)?;
 
     let output_path = collision_safe_pdf_output_path(&requested_output)?;
-    let plan = build_qpdf_extract_arguments_for_output(&source, &pages, &output_path)?;
-
     let platform = current_platform_key();
     let qpdf_path = resolve_qpdf_sidecar_path(platform)?;
     let output_parent = output_path
         .parent()
         .ok_or_else(|| "Output PDF must have a converted output folder.".to_string())?;
-    fs::create_dir_all(output_parent).map_err(|error| {
-        format!(
-            "Unable to create converted output folder {}: {error}",
-            path_to_string(output_parent)
-        )
-    })?;
-
-    if output_path.exists() {
-        return Err(format!(
-            "Output PDF already exists and will not be overwritten: {}",
-            path_to_string(&output_path)
-        ));
-    }
+    let workspace = TaskOutputWorkspace::create(output_parent, control.task_id())?;
+    let temp_output = workspace.temp_file("extracted.pdf")?;
+    let plan = build_qpdf_extract_arguments_for_output(&source, &pages, &temp_output)?;
 
     let execution = run_qpdf_command(
         &qpdf_path,
@@ -663,7 +652,6 @@ fn execute_qpdf_extract(
     )?;
 
     if execution.cancelled || control.is_cancelled() {
-        remove_partial_output(&output_path);
         return Ok(QpdfExtractResult {
             success: false,
             operation: "extract",
@@ -680,7 +668,6 @@ fn execute_qpdf_extract(
     }
 
     if execution.timed_out {
-        remove_partial_output(&output_path);
         return Ok(QpdfExtractResult {
             success: false,
             operation: "extract",
@@ -699,7 +686,6 @@ fn execute_qpdf_extract(
     }
 
     if execution.exit_code != Some(0) {
-        remove_partial_output(&output_path);
         return Ok(QpdfExtractResult {
             success: false,
             operation: "extract",
@@ -715,36 +701,48 @@ fn execute_qpdf_extract(
         });
     }
 
-    let output_metadata = fs::metadata(&output_path).map_err(|error| {
-        format!(
-            "qpdf reported success, but extracted output PDF is missing: {}: {error}",
-            path_to_string(&output_path)
-        )
-    })?;
-
-    if output_metadata.len() == 0 {
-        remove_partial_output(&output_path);
-        return Ok(QpdfExtractResult {
-            success: false,
-            operation: "extract",
-            source_path: path_to_string(&source_path),
-            output_path: path_to_string(&output_path),
-            output_bytes: 0,
-            pages,
-            stdout: execution.stdout,
-            stderr: execution.stderr,
-            exit_code: execution.exit_code,
-            timed_out: false,
-            message: "qpdf reported success, but extracted output PDF is empty.".to_string(),
-        });
-    }
+    let finalized =
+        match control.commit_outputs(|| workspace.finalize_file(&temp_output, &output_path)) {
+            Ok(finalized) => finalized,
+            Err(TaskCommitError::Cancelled) => {
+                return Ok(QpdfExtractResult {
+                    success: false,
+                    operation: "extract",
+                    source_path: path_to_string(&source_path),
+                    output_path: path_to_string(&output_path),
+                    output_bytes: 0,
+                    pages,
+                    stdout: execution.stdout,
+                    stderr: execution.stderr,
+                    exit_code: execution.exit_code,
+                    timed_out: false,
+                    message: "PDF page extraction task was cancelled before output finalization."
+                        .to_string(),
+                });
+            }
+            Err(TaskCommitError::Finalize(message)) => {
+                return Ok(QpdfExtractResult {
+                    success: false,
+                    operation: "extract",
+                    source_path: path_to_string(&source_path),
+                    output_path: path_to_string(&output_path),
+                    output_bytes: 0,
+                    pages,
+                    stdout: execution.stdout,
+                    stderr: execution.stderr,
+                    exit_code: execution.exit_code,
+                    timed_out: false,
+                    message,
+                });
+            }
+        };
 
     Ok(QpdfExtractResult {
         success: true,
         operation: "extract",
         source_path: path_to_string(&source_path),
         output_path: path_to_string(&output_path),
-        output_bytes: output_metadata.len(),
+        output_bytes: finalized.bytes,
         pages,
         stdout: execution.stdout,
         stderr: execution.stderr,
@@ -773,26 +771,14 @@ fn execute_qpdf_rotate(
     validate_single_pdf_output_location(&source_path, &requested_output)?;
 
     let output_path = collision_safe_pdf_output_path(&requested_output)?;
-    let plan = build_qpdf_rotate_arguments_for_output(&source, &output_path, &degrees, &pages)?;
-
     let platform = current_platform_key();
     let qpdf_path = resolve_qpdf_sidecar_path(platform)?;
     let output_parent = output_path
         .parent()
         .ok_or_else(|| "Output PDF must have a converted output folder.".to_string())?;
-    fs::create_dir_all(output_parent).map_err(|error| {
-        format!(
-            "Unable to create converted output folder {}: {error}",
-            path_to_string(output_parent)
-        )
-    })?;
-
-    if output_path.exists() {
-        return Err(format!(
-            "Output PDF already exists and will not be overwritten: {}",
-            path_to_string(&output_path)
-        ));
-    }
+    let workspace = TaskOutputWorkspace::create(output_parent, control.task_id())?;
+    let temp_output = workspace.temp_file("rotated.pdf")?;
+    let plan = build_qpdf_rotate_arguments_for_output(&source, &temp_output, &degrees, &pages)?;
 
     let execution = run_qpdf_command(
         &qpdf_path,
@@ -802,7 +788,6 @@ fn execute_qpdf_rotate(
     )?;
 
     if execution.cancelled || control.is_cancelled() {
-        remove_partial_output(&output_path);
         return Ok(QpdfRotateResult {
             success: false,
             operation: "rotate",
@@ -820,7 +805,6 @@ fn execute_qpdf_rotate(
     }
 
     if execution.timed_out {
-        remove_partial_output(&output_path);
         return Ok(QpdfRotateResult {
             success: false,
             operation: "rotate",
@@ -838,7 +822,6 @@ fn execute_qpdf_rotate(
     }
 
     if execution.exit_code != Some(0) {
-        remove_partial_output(&output_path);
         return Ok(QpdfRotateResult {
             success: false,
             operation: "rotate",
@@ -855,37 +838,50 @@ fn execute_qpdf_rotate(
         });
     }
 
-    let output_metadata = fs::metadata(&output_path).map_err(|error| {
-        format!(
-            "qpdf reported success, but rotated output PDF is missing: {}: {error}",
-            path_to_string(&output_path)
-        )
-    })?;
-
-    if output_metadata.len() == 0 {
-        remove_partial_output(&output_path);
-        return Ok(QpdfRotateResult {
-            success: false,
-            operation: "rotate",
-            source_path: path_to_string(&source_path),
-            output_path: path_to_string(&output_path),
-            output_bytes: 0,
-            degrees,
-            pages,
-            stdout: execution.stdout,
-            stderr: execution.stderr,
-            exit_code: execution.exit_code,
-            timed_out: false,
-            message: "qpdf reported success, but rotated output PDF is empty.".to_string(),
-        });
-    }
+    let finalized = match control
+        .commit_outputs(|| workspace.finalize_file(&temp_output, &output_path))
+    {
+        Ok(finalized) => finalized,
+        Err(TaskCommitError::Cancelled) => {
+            return Ok(QpdfRotateResult {
+                success: false,
+                operation: "rotate",
+                source_path: path_to_string(&source_path),
+                output_path: path_to_string(&output_path),
+                output_bytes: 0,
+                degrees,
+                pages,
+                stdout: execution.stdout,
+                stderr: execution.stderr,
+                exit_code: execution.exit_code,
+                timed_out: false,
+                message: "PDF rotate task was cancelled before output finalization.".to_string(),
+            });
+        }
+        Err(TaskCommitError::Finalize(message)) => {
+            return Ok(QpdfRotateResult {
+                success: false,
+                operation: "rotate",
+                source_path: path_to_string(&source_path),
+                output_path: path_to_string(&output_path),
+                output_bytes: 0,
+                degrees,
+                pages,
+                stdout: execution.stdout,
+                stderr: execution.stderr,
+                exit_code: execution.exit_code,
+                timed_out: false,
+                message,
+            });
+        }
+    };
 
     Ok(QpdfRotateResult {
         success: true,
         operation: "rotate",
         source_path: path_to_string(&source_path),
         output_path: path_to_string(&output_path),
-        output_bytes: output_metadata.len(),
+        output_bytes: finalized.bytes,
         degrees,
         pages,
         stdout: execution.stdout,
@@ -1116,12 +1112,24 @@ fn build_qpdf_merge_arguments(request: &QpdfMergeRequest) -> Result<QpdfCommandP
         return Err("Merge requires at least two source PDFs.".to_string());
     }
 
+    let output = validate_pdf_path(&request.output, "Output PDF")?;
+    build_qpdf_merge_arguments_for_output(&request.sources, Path::new(&output))
+}
+
+fn build_qpdf_merge_arguments_for_output(
+    sources: &[String],
+    output: &Path,
+) -> Result<QpdfCommandPlan, String> {
+    if sources.len() < 2 {
+        return Err("Merge requires at least two source PDFs.".to_string());
+    }
+
     let mut arguments = vec!["--empty".to_string(), "--pages".to_string()];
-    for source in &request.sources {
+    for source in sources {
         arguments.push(validate_pdf_path(source, "Source PDF")?);
     }
     arguments.push("--".to_string());
-    arguments.push(validate_pdf_path(&request.output, "Output PDF")?);
+    arguments.push(validate_pdf_path(&path_to_string(output), "Output PDF")?);
 
     Ok(qpdf_plan(arguments))
 }
@@ -1503,42 +1511,14 @@ fn split_prefix_has_collision(output_directory: &Path, prefix: &str) -> Result<b
     Ok(false)
 }
 
-fn list_directory_filenames(directory: &Path) -> Result<HashSet<String>, String> {
-    let mut filenames = HashSet::new();
-    for entry in fs::read_dir(directory).map_err(|error| {
-        format!(
-            "Unable to inspect converted output folder {}: {error}",
-            path_to_string(directory)
-        )
-    })? {
-        let entry = entry.map_err(|error| {
-            format!(
-                "Unable to inspect converted output folder {}: {error}",
-                path_to_string(directory)
-            )
-        })?;
-        filenames.insert(entry.file_name().to_string_lossy().into_owned());
-    }
-
-    Ok(filenames)
-}
-
-fn collect_new_split_outputs(
-    output_directory: &Path,
-    prefix: &str,
-    existing_outputs: &HashSet<String>,
-) -> Vec<PathBuf> {
+fn collect_task_split_outputs(workspace: &Path, prefix: &str) -> Vec<PathBuf> {
     let mut outputs = Vec::new();
-    let Ok(entries) = fs::read_dir(output_directory) else {
+    let Ok(entries) = fs::read_dir(workspace) else {
         return outputs;
     };
 
     for entry in entries.flatten() {
         let file_name = entry.file_name().to_string_lossy().into_owned();
-        if existing_outputs.contains(&file_name) {
-            continue;
-        }
-
         let path = entry.path();
         if is_split_output_name_for_prefix(&file_name, prefix)
             && path.is_file()
@@ -1550,12 +1530,6 @@ fn collect_new_split_outputs(
 
     outputs.sort();
     outputs
-}
-
-fn remove_split_outputs(output_directory: &Path, prefix: &str, existing_outputs: &HashSet<String>) {
-    for output in collect_new_split_outputs(output_directory, prefix, existing_outputs) {
-        let _ = fs::remove_file(output);
-    }
 }
 
 fn is_split_output_name_for_prefix(file_name: &str, prefix: &str) -> bool {
@@ -1642,12 +1616,6 @@ fn join_pipe_reader(reader: Option<thread::JoinHandle<Vec<u8>>>) -> String {
         .and_then(|handle| handle.join().ok())
         .unwrap_or_default();
     String::from_utf8_lossy(&bytes).trim().to_string()
-}
-
-fn remove_partial_output(output_path: &Path) {
-    if output_path.exists() {
-        let _ = fs::remove_file(output_path);
-    }
 }
 
 fn normalize_rotation_degrees(degrees: i16) -> Result<String, String> {
@@ -1997,22 +1965,22 @@ mod tests {
     }
 
     #[test]
-    fn validates_new_split_outputs_only() {
+    fn collects_split_outputs_only_from_task_workspace() {
         let case_dir = temp_fixture_path("split-output-validation");
         let converted_dir = case_dir.join("converted");
+        let workspace = converted_dir.join(".localconvert-task-test");
         fs::create_dir_all(&converted_dir).expect("converted test directory should be created");
+        fs::create_dir_all(&workspace).expect("task workspace should be created");
         fs::write(converted_dir.join("report-page-1.pdf"), b"existing")
             .expect("existing split output should be written");
-        fs::write(converted_dir.join("report-page (1)-1.pdf"), b"new")
+        fs::write(workspace.join("report-page (1)-1.pdf"), b"new")
             .expect("new split output should be written");
-        fs::write(converted_dir.join("report-page (1)-note.txt"), b"not pdf")
+        fs::write(workspace.join("report-page (1)-note.txt"), b"not pdf")
             .expect("non-pdf fixture should be written");
 
-        let existing_outputs = HashSet::from(["report-page-1.pdf".to_string()]);
-        let outputs =
-            collect_new_split_outputs(&converted_dir, "report-page (1)", &existing_outputs);
+        let outputs = collect_task_split_outputs(&workspace, "report-page (1)");
 
-        assert_eq!(outputs, vec![converted_dir.join("report-page (1)-1.pdf")]);
+        assert_eq!(outputs, vec![workspace.join("report-page (1)-1.pdf")]);
 
         let _ = fs::remove_dir_all(case_dir);
     }

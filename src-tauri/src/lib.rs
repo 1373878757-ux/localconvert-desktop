@@ -14,6 +14,7 @@ mod image_convert;
 mod image_engine;
 mod image_ops;
 mod native_intake;
+mod output_finalize;
 mod qpdf;
 mod task_registry;
 

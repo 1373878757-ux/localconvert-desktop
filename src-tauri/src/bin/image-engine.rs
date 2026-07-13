@@ -275,26 +275,19 @@ fn write_image_create_new(
     output: &Path,
     target_format: TargetFormat,
 ) -> Result<(), String> {
-    let write_result = (|| -> Result<(), String> {
-        let output_file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(output)
-            .map_err(|error| format!("Unable to create output image: {error}"))?;
-        let mut writer = BufWriter::new(output_file);
-        write_image(image, &mut writer, target_format)
-            .map_err(|error| format!("Unable to encode output image: {error}"))?;
-        writer
-            .flush()
-            .map_err(|error| format!("Unable to finish output image: {error}"))?;
-        Ok(())
-    })();
-
-    if write_result.is_err() {
-        let _ = fs::remove_file(output);
-    }
-
-    write_result
+    // The backend owns failure cleanup through its task-scoped workspace.
+    let output_file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(output)
+        .map_err(|error| format!("Unable to create output image: {error}"))?;
+    let mut writer = BufWriter::new(output_file);
+    write_image(image, &mut writer, target_format)
+        .map_err(|error| format!("Unable to encode output image: {error}"))?;
+    writer
+        .flush()
+        .map_err(|error| format!("Unable to finish output image: {error}"))?;
+    Ok(())
 }
 
 fn write_image<W>(

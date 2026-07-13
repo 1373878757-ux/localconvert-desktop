@@ -13,6 +13,8 @@
 - Added collision-safe `converted` output planning, timeout handling, process cleanup, diagnostics capture, and output image validation.
 - Added a Rust backend task registry for real qpdf and image-engine jobs, with async Tauri command boundaries and stable task IDs.
 - Added process-backed cancellation, terminal cancelled-state arbitration, and partial-output cleanup for running local conversions.
+- Added task-owned temporary output workspaces and validated atomic no-overwrite publication for qpdf and image-engine results.
+- Restricted failure and cancellation cleanup to task-owned temporary paths so pre-existing or concurrently created final files are never deleted.
 
 ### Unchanged
 

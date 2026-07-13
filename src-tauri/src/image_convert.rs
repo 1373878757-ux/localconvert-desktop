@@ -1,6 +1,7 @@
 use crate::{
     image_engine, image_ops,
-    task_registry::{ChildProcessState, TaskControl},
+    output_finalize::TaskOutputWorkspace,
+    task_registry::{ChildProcessState, TaskCommitError, TaskControl},
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -115,20 +116,9 @@ fn execute_image_convert(
 
     let image_engine_path =
         image_engine::resolve_image_engine_sidecar_path(image_engine::current_platform_key())?;
-    fs::create_dir_all(&converted_folder).map_err(|error| {
-        format!(
-            "Unable to create converted output folder {}: {error}",
-            path_to_string(&converted_folder)
-        )
-    })?;
-    if output_path.exists() {
-        return Err(format!(
-            "Output image already exists and will not be overwritten: {}",
-            path_to_string(&output_path)
-        ));
-    }
-
-    let plan = build_image_convert_arguments(&source_path, &output_path, &target_format)?;
+    let workspace = TaskOutputWorkspace::create(&converted_folder, control.task_id())?;
+    let temp_output = workspace.temp_file(&format!("output.{target_format}"))?;
+    let plan = build_image_convert_arguments(&source_path, &temp_output, &target_format)?;
     let execution = run_image_engine_command(
         &image_engine_path,
         &plan.arguments,
@@ -137,7 +127,6 @@ fn execute_image_convert(
     )?;
 
     if execution.cancelled || control.is_cancelled() {
-        remove_partial_output(&output_path);
         return Ok(ImageConvertResult {
             success: false,
             operation: "convert",
@@ -157,7 +146,6 @@ fn execute_image_convert(
     }
 
     if execution.timed_out {
-        remove_partial_output(&output_path);
         return Ok(ImageConvertResult {
             success: false,
             operation: "convert",
@@ -179,7 +167,6 @@ fn execute_image_convert(
     }
 
     if execution.exit_code != Some(0) {
-        remove_partial_output(&output_path);
         return Ok(ImageConvertResult {
             success: false,
             operation: "convert",
@@ -198,7 +185,7 @@ fn execute_image_convert(
         });
     }
 
-    let (output_bytes, width, height) = match validate_output_image(&output_path) {
+    let (_, width, height) = match validate_output_image(&temp_output) {
         Ok(output) => output,
         Err(message) => {
             return Ok(ImageConvertResult {
@@ -219,6 +206,47 @@ fn execute_image_convert(
             });
         }
     };
+    let finalized =
+        match control.commit_outputs(|| workspace.finalize_file(&temp_output, &output_path)) {
+            Ok(finalized) => finalized,
+            Err(TaskCommitError::Cancelled) => {
+                return Ok(ImageConvertResult {
+                    success: false,
+                    operation: "convert",
+                    source_path: path_to_string(&source_path),
+                    output_path: path_to_string(&output_path),
+                    source_format,
+                    target_format,
+                    output_bytes: 0,
+                    width: 0,
+                    height: 0,
+                    stdout: execution.stdout,
+                    stderr: execution.stderr,
+                    exit_code: execution.exit_code,
+                    timed_out: false,
+                    message: "Image conversion task was cancelled before output finalization."
+                        .to_string(),
+                });
+            }
+            Err(TaskCommitError::Finalize(message)) => {
+                return Ok(ImageConvertResult {
+                    success: false,
+                    operation: "convert",
+                    source_path: path_to_string(&source_path),
+                    output_path: path_to_string(&output_path),
+                    source_format,
+                    target_format,
+                    output_bytes: 0,
+                    width: 0,
+                    height: 0,
+                    stdout: execution.stdout,
+                    stderr: execution.stderr,
+                    exit_code: execution.exit_code,
+                    timed_out: false,
+                    message,
+                });
+            }
+        };
     Ok(ImageConvertResult {
         success: true,
         operation: "convert",
@@ -226,7 +254,7 @@ fn execute_image_convert(
         output_path: path_to_string(&output_path),
         source_format,
         target_format,
-        output_bytes,
+        output_bytes: finalized.bytes,
         width,
         height,
         stdout: execution.stdout,
@@ -243,9 +271,6 @@ impl ImageConvertResult {
     }
 
     pub(crate) fn mark_cancelled(&mut self) {
-        if self.success {
-            remove_partial_output(Path::new(&self.output_path));
-        }
         self.success = false;
         self.output_bytes = 0;
         self.width = 0;
@@ -465,26 +490,16 @@ fn validate_output_image(output_path: &Path) -> Result<(u64, u32, u32), String> 
         )
     })?;
     if !metadata.is_file() || metadata.len() == 0 {
-        remove_partial_output(output_path);
         return Err("image-engine reported success, but output image is empty.".to_string());
     }
 
-    let (width, height) = image::image_dimensions(output_path).map_err(|error| {
-        remove_partial_output(output_path);
-        format!("image-engine output image could not be validated: {error}")
-    })?;
+    let (width, height) = image::image_dimensions(output_path)
+        .map_err(|error| format!("image-engine output image could not be validated: {error}"))?;
     if width == 0 || height == 0 {
-        remove_partial_output(output_path);
         return Err("image-engine output image has invalid dimensions.".to_string());
     }
 
     Ok((metadata.len(), width, height))
-}
-
-fn remove_partial_output(output_path: &Path) {
-    if output_path.exists() {
-        let _ = fs::remove_file(output_path);
-    }
 }
 
 fn path_to_string(path: &Path) -> String {
@@ -599,7 +614,7 @@ mod tests {
         let empty = case_dir.join("empty.png");
         fs::write(&empty, []).expect("empty output should be created");
         assert!(validate_output_image(&empty).is_err());
-        assert!(!empty.exists());
+        assert!(empty.exists());
 
         let valid = case_dir.join("valid.png");
         create_test_png(&valid);
