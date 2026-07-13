@@ -5,12 +5,23 @@ export type TaskStatus =
   | "failed"
   | "cancelled";
 
+export type TaskSourceKind = "native-path" | "browser-preview";
+
+export type NativePathMetadata = {
+  sourcePath: string;
+  displayName: string;
+  extension: string;
+  size: number;
+  sourceKind: "native-path";
+};
+
 export type LocalTask = {
-  id: string;
+  taskId: string;
   displayName: string;
   size: number;
   extension: string;
   sourcePath?: string;
+  sourceKind: TaskSourceKind;
   sourcePreview: string;
   outputPreview: string;
   status: TaskStatus;
@@ -80,27 +91,48 @@ export function createTaskFromFile(
   targetExtension = "pdf"
 ): LocalTask {
   const displayName = file.name || "未命名";
-  const fileWithOptionalPath = file as File & {
-    path?: string;
-    webkitRelativePath?: string;
-  };
-  const sourcePath = fileWithOptionalPath.path?.trim() || undefined;
   const desiredOutputName = `${getBaseName(displayName)}.${targetExtension}`;
   const outputName = getOutputName(desiredOutputName, existingOutputNames);
 
   return {
-    id: `${now}-${Math.random().toString(36).slice(2, 9)}`,
+    taskId: createTaskId(now),
     displayName,
     size: file.size,
     extension: getExtension(displayName),
-    sourcePath,
-    sourcePreview:
-      sourcePath ||
-      fileWithOptionalPath.webkitRelativePath ||
-      displayName,
+    sourceKind: "browser-preview",
+    sourcePreview: file.webkitRelativePath || displayName,
     outputPreview: `converted/${outputName}`,
     status: "waiting",
     errorLog: "",
     createdAt: now
   };
+}
+
+export function createTaskFromNativePathMetadata(
+  metadata: NativePathMetadata,
+  existingOutputNames: readonly string[],
+  now = Date.now(),
+  targetExtension = "pdf"
+): LocalTask {
+  const displayName = metadata.displayName || "未命名";
+  const desiredOutputName = `${getBaseName(displayName)}.${targetExtension}`;
+  const outputName = getOutputName(desiredOutputName, existingOutputNames);
+
+  return {
+    taskId: createTaskId(now),
+    displayName,
+    size: metadata.size,
+    extension: metadata.extension || getExtension(displayName),
+    sourcePath: metadata.sourcePath,
+    sourceKind: "native-path",
+    sourcePreview: metadata.sourcePath,
+    outputPreview: `converted/${outputName}`,
+    status: "waiting",
+    errorLog: "",
+    createdAt: now
+  };
+}
+
+function createTaskId(now: number): string {
+  return `${now}-${Math.random().toString(36).slice(2, 9)}`;
 }

@@ -12,6 +12,7 @@ use tauri::Manager;
 mod image_convert;
 mod image_engine;
 mod image_ops;
+mod native_intake;
 mod qpdf;
 
 const DEFAULT_OUTPUT_STRATEGY: &str = "converted-folder-next-to-source";
@@ -316,6 +317,7 @@ fn path_to_string(path: &Path) -> String {
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(StartupState::default())
         .setup(|app| {
             let startup_state = app.state::<StartupState>().inner().clone();
@@ -331,6 +333,7 @@ pub fn run() {
             engine_self_check,
             startup_status,
             plan_output_path,
+            native_intake::inspect_native_paths,
             image_convert::image_convert_file,
             image_ops::plan_image_convert,
             image_ops::plan_image_compress,

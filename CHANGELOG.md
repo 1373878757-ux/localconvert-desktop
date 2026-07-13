@@ -4,6 +4,8 @@
 
 ### Added
 
+- Added Tauri-native file selection and drag-and-drop intake so enabled local operations receive validated absolute source paths.
+- Added a read-only Rust path inspection boundary that records file name, extension, size, and source kind without reading file contents.
 - Added a backend planning boundary for future Preview 0.2 image tools.
 - Added a backend detection boundary for a future bundled image-engine sidecar.
 - Added a first-party Rust `image-engine` macOS Apple Silicon sidecar with real local JPG/JPEG, PNG, and WebP conversion.
@@ -12,6 +14,7 @@
 
 ### Unchanged
 
+- Browser-only file input remains a metadata-preview fallback and cannot enable real PDF or image operations.
 - AVIF, TIFF/TIF, HEIC, image compression, resizing, metadata removal, and images-to-PDF remain disabled.
 - No LibreOffice, PDFium, libvips, Sharp, ImageMagick, fonts, upload, cloud, server-side conversion, or telemetry is added.
 - Existing qpdf PDF merge, split, rotate, and page extraction behavior is unchanged.

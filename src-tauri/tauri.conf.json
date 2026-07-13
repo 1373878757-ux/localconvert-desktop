@@ -20,7 +20,7 @@
         "minWidth": 920,
         "minHeight": 620,
         "visible": false,
-        "dragDropEnabled": false
+        "dragDropEnabled": true
       },
       {
         "label": "splashscreen",

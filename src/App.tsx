@@ -7,10 +7,14 @@ import {
   useState
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
   LocalTask,
+  NativePathMetadata,
   TaskStatus,
   createTaskFromFile,
+  createTaskFromNativePathMetadata,
   formatBytes,
   getBaseName,
   getExtension,
@@ -44,6 +48,16 @@ type OutputPathPlan = {
   plannedOutputFilename: string;
   plannedOutputPath: string;
   collisionStrategyExplanation: string;
+};
+
+type RejectedNativePath = {
+  sourcePath: string;
+  message: string;
+};
+
+type NativePathInspection = {
+  files: NativePathMetadata[];
+  rejected: RejectedNativePath[];
 };
 
 type QpdfMergeResult = {
@@ -174,6 +188,8 @@ function App() {
   const [activeTool, setActiveTool] = useState("PDF 工具");
   const [dragActive, setDragActive] = useState(false);
   const [folderMessage, setFolderMessage] = useState("");
+  const [intakeMessage, setIntakeMessage] = useState("");
+  const [intakeError, setIntakeError] = useState("");
   const [startupError, setStartupError] = useState("");
   const [extractPageRange, setExtractPageRange] = useState("");
   const [imageTargetFormat, setImageTargetFormat] =
@@ -182,6 +198,9 @@ function App() {
     () => new Set()
   );
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const nativePathIntakeRef = useRef<(paths: string[]) => Promise<void>>(
+    async () => undefined
+  );
 
   useEffect(() => {
     async function loadSelfCheck() {
@@ -234,6 +253,7 @@ function App() {
   const selectedTaskWithError = tasks.find((task) => task.errorLog);
   const inspectorErrorLog =
     selectedTaskWithError?.errorLog ||
+    (intakeError ? `文件导入问题:\n${intakeError}` : "") ||
     (startupError ? `启动初始化问题:\n${startupError}` : "");
   const qpdfEngine = selfCheck.engines.find((engine) => engine.name === "qpdf");
   const qpdfAvailable = qpdfEngine?.status === "available";
@@ -252,29 +272,34 @@ function App() {
   const realLocalPdfTasks = tasks.filter(
     (task) =>
       task.extension === "pdf" &&
+      task.sourceKind === "native-path" &&
       Boolean(task.sourcePath) &&
       task.status !== "cancelled"
   );
   const realLocalImageTasks = tasks.filter(
     (task) =>
       enabledImageExtensions.has(task.extension) &&
+      task.sourceKind === "native-path" &&
       Boolean(task.sourcePath) &&
       task.status !== "cancelled"
   );
   const selectedTasks = useMemo(
-    () => tasks.filter((task) => selectedTaskIds.has(task.id)),
+    () => tasks.filter((task) => selectedTaskIds.has(task.taskId)),
     [selectedTaskIds, tasks]
   );
   const selectedPdfTasks = selectedTasks.filter((task) => task.extension === "pdf");
   const selectedNonPdfTasks = selectedTasks.filter((task) => task.extension !== "pdf");
   const selectedPdfTasksWithoutPath = selectedPdfTasks.filter(
-    (task) => !task.sourcePath
+    (task) => task.sourceKind !== "native-path" || !task.sourcePath
   );
   const selectedCancelledPdfTasks = selectedPdfTasks.filter(
     (task) => task.status === "cancelled"
   );
   const selectedRealLocalPdfTasks = selectedPdfTasks.filter(
-    (task) => Boolean(task.sourcePath) && task.status !== "cancelled"
+    (task) =>
+      task.sourceKind === "native-path" &&
+      Boolean(task.sourcePath) &&
+      task.status !== "cancelled"
   );
   const selectedSinglePdfTask =
     selectedRealLocalPdfTasks.length === 1 ? selectedRealLocalPdfTasks[0] : undefined;
@@ -303,7 +328,7 @@ function App() {
     (task) => !enabledImageExtensions.has(task.extension)
   );
   const selectedImageTasksWithoutPath = selectedEnabledImageTasks.filter(
-    (task) => !task.sourcePath
+    (task) => task.sourceKind !== "native-path" || !task.sourcePath
   );
   const selectedCancelledImageTasks = selectedEnabledImageTasks.filter(
     (task) => task.status === "cancelled"
@@ -315,7 +340,10 @@ function App() {
     (task) => canonicalImageFormat(task.extension) === imageTargetFormat
   );
   const selectedRealLocalImageTasks = selectedEnabledImageTasks.filter(
-    (task) => Boolean(task.sourcePath) && task.status !== "cancelled"
+    (task) =>
+      task.sourceKind === "native-path" &&
+      Boolean(task.sourcePath) &&
+      task.status !== "cancelled"
   );
   const canConvertSelectedImages =
     imageEngineAvailable &&
@@ -327,7 +355,7 @@ function App() {
     selectedSameFormatImageTasks.length === 0;
 
   async function planBackendOutput(task: LocalTask, targetExtension = "pdf") {
-    if (!task.sourcePath) {
+    if (task.sourceKind !== "native-path" || !task.sourcePath) {
       return;
     }
 
@@ -342,7 +370,7 @@ function App() {
 
       setTasks((currentTasks) =>
         currentTasks.map((currentTask) =>
-          currentTask.id === task.id
+          currentTask.taskId === task.taskId
             ? {
                 ...currentTask,
                 outputPreview: plan.plannedOutputPath
@@ -489,6 +517,7 @@ function App() {
     return (
       qpdfAvailable &&
       task.extension === "pdf" &&
+      task.sourceKind === "native-path" &&
       Boolean(task.sourcePath) &&
       task.status !== "converting" &&
       task.status !== "cancelled"
@@ -517,7 +546,11 @@ function App() {
 
   function selectPdfTasks() {
     setSelectedTaskIds(
-      new Set(tasks.filter((task) => task.extension === "pdf").map((task) => task.id))
+      new Set(
+        tasks
+          .filter((task) => task.extension === "pdf")
+          .map((task) => task.taskId)
+      )
     );
   }
 
@@ -526,7 +559,7 @@ function App() {
       new Set(
         tasks
           .filter((task) => enabledImageExtensions.has(task.extension))
-          .map((task) => task.id)
+          .map((task) => task.taskId)
       )
     );
   }
@@ -549,7 +582,7 @@ function App() {
     }
 
     if (selectedPdfTasksWithoutPath.length > 0) {
-      return "部分所选 PDF 只有显示元数据。qpdf 工具需要桌面端提供真实本地路径。";
+      return "部分所选 PDF 只有预览元数据，没有本地路径。真实 PDF 工具需要通过原生“选择文件”或桌面拖放重新导入。";
     }
 
     if (selectedCancelledPdfTasks.length > 0) {
@@ -577,7 +610,7 @@ function App() {
     }
 
     if (selectedImageTasksWithoutPath.length > 0) {
-      return "部分所选图片只有显示元数据。真实转换需要桌面端提供本地文件路径。";
+      return "部分所选图片只有预览元数据，没有本地路径。真实图片转换需要通过原生“选择文件”或桌面拖放重新导入。";
     }
 
     if (selectedCancelledImageTasks.length > 0) {
@@ -595,7 +628,7 @@ function App() {
     return `已选择 ${selectedRealLocalImageTasks.length} 张本地图片，将转换为 ${imageTargetFormat.toUpperCase()}。`;
   }
 
-  function addFiles(fileList: FileList | File[]) {
+  function addPreviewFiles(fileList: FileList | File[]) {
     const files = Array.from(fileList);
     if (files.length === 0) {
       return;
@@ -622,11 +655,147 @@ function App() {
       return [...createdTasks, ...currentTasks];
     });
 
-    for (const task of createdTasks) {
-      void planBackendOutput(
-        task,
-        enabledImageExtensions.has(task.extension) ? imageTargetFormat : "pdf"
+    setIntakeError("");
+    setIntakeMessage(
+      `已添加 ${createdTasks.length} 个预览任务。这些条目没有本地绝对路径，真实 PDF 和图片工具不可用；请使用桌面端原生选择或拖放导入。`
+    );
+  }
+
+  async function addNativePaths(paths: string[]) {
+    if (paths.length === 0) {
+      return;
+    }
+
+    setIntakeError("");
+
+    let inspection: NativePathInspection;
+    try {
+      inspection = await invoke<NativePathInspection>("inspect_native_paths", {
+        request: { paths }
+      });
+    } catch (error) {
+      const message =
+        typeof error === "string" ? error : "原生本地路径检查失败。";
+      setIntakeError(message);
+      setIntakeMessage("未能添加本地文件。请查看右侧错误日志后重试。");
+      return;
+    }
+
+    const outputNames = tasks.map((task) =>
+      outputNameFromPreview(task.outputPreview)
+    );
+    const createdTasks: LocalTask[] = [];
+
+    for (const metadata of inspection.files) {
+      const targetExtension = enabledImageExtensions.has(metadata.extension)
+        ? imageTargetFormat
+        : "pdf";
+      const task = createTaskFromNativePathMetadata(
+        metadata,
+        [
+          ...outputNames,
+          ...createdTasks.map((item) =>
+            outputNameFromPreview(item.outputPreview)
+          )
+        ],
+        Date.now(),
+        targetExtension
       );
+      createdTasks.push(task);
+    }
+
+    if (createdTasks.length > 0) {
+      setTasks((currentTasks) => [...createdTasks, ...currentTasks]);
+      for (const task of createdTasks) {
+        void planBackendOutput(
+          task,
+          enabledImageExtensions.has(task.extension) ? imageTargetFormat : "pdf"
+        );
+      }
+    }
+
+    if (inspection.rejected.length > 0) {
+      setIntakeError(
+        inspection.rejected
+          .map(
+            (item) =>
+              `${item.sourcePath || "<空路径>"}\n${item.message}`
+          )
+          .join("\n\n")
+      );
+    }
+
+    if (createdTasks.length > 0) {
+      setIntakeMessage(
+        inspection.rejected.length > 0
+          ? `已通过原生本地路径添加 ${createdTasks.length} 个文件，另有 ${inspection.rejected.length} 项未添加。`
+          : `已通过原生本地路径添加 ${createdTasks.length} 个文件。`
+      );
+    } else {
+      setIntakeMessage("没有可添加的本地文件。文件夹和无效路径不会进入任务队列。");
+    }
+  }
+
+  nativePathIntakeRef.current = addNativePaths;
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+
+    async function registerNativeDragDrop() {
+      try {
+        const stopListening = await getCurrentWebview().onDragDropEvent(
+          (event) => {
+            if (event.payload.type === "enter" || event.payload.type === "over") {
+              setDragActive(true);
+              return;
+            }
+
+            setDragActive(false);
+            if (event.payload.type === "drop") {
+              void nativePathIntakeRef.current(event.payload.paths);
+            }
+          }
+        );
+
+        if (disposed) {
+          stopListening();
+        } else {
+          unlisten = stopListening;
+        }
+      } catch {
+        // Browser-only development keeps the metadata-preview fallback below.
+      }
+    }
+
+    void registerNativeDragDrop();
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
+  async function selectNativeFiles() {
+    setIntakeError("");
+
+    try {
+      const selected = await open({
+        title: "选择本地文件",
+        multiple: true,
+        directory: false
+      });
+      const paths = Array.isArray(selected)
+        ? selected
+        : selected
+          ? [selected]
+          : [];
+      await addNativePaths(paths);
+    } catch {
+      setIntakeMessage(
+        "原生文件选择当前不可用，已切换到浏览器预览模式。预览任务没有本地路径，不能运行真实 PDF 或图片工具。"
+      );
+      fileInputRef.current?.click();
     }
   }
 
@@ -636,12 +805,12 @@ function App() {
 
     setTasks((currentTasks) => {
       const reservedOutputNames = currentTasks
-        .filter((task) => !selectedTaskIds.has(task.id))
+        .filter((task) => !selectedTaskIds.has(task.taskId))
         .map((task) => outputNameFromPreview(task.outputPreview));
 
       return currentTasks.map((task) => {
         if (
-          !selectedTaskIds.has(task.id) ||
+          !selectedTaskIds.has(task.taskId) ||
           !enabledImageExtensions.has(task.extension)
         ) {
           return task;
@@ -662,7 +831,7 @@ function App() {
     });
 
     for (const task of selectedEnabledImageTasks) {
-      if (task.sourcePath) {
+      if (task.sourceKind === "native-path" && task.sourcePath) {
         void planBackendOutput(task, targetFormat);
       }
     }
@@ -670,7 +839,7 @@ function App() {
 
   function handleInputChange(event: ChangeEvent<HTMLInputElement>) {
     if (event.currentTarget.files) {
-      addFiles(event.currentTarget.files);
+      addPreviewFiles(event.currentTarget.files);
     }
     event.currentTarget.value = "";
   }
@@ -678,13 +847,13 @@ function App() {
   function handleDrop(event: DragEvent<HTMLElement>) {
     event.preventDefault();
     setDragActive(false);
-    addFiles(event.dataTransfer.files);
+    addPreviewFiles(event.dataTransfer.files);
   }
 
   function retryTask(taskId: string) {
     setTasks((currentTasks) =>
       currentTasks.map((task) =>
-        task.id === taskId
+        task.taskId === taskId
           ? {
               ...task,
               status: "waiting",
@@ -698,7 +867,7 @@ function App() {
   function cancelTask(taskId: string) {
     setTasks((currentTasks) =>
       currentTasks.map((task) =>
-        task.id === taskId && task.status !== "completed"
+        task.taskId === taskId && task.status !== "completed"
           ? {
               ...task,
               status: "cancelled"
@@ -710,7 +879,7 @@ function App() {
 
   function removeTask(taskId: string) {
     setTasks((currentTasks) =>
-      currentTasks.filter((task) => task.id !== taskId)
+      currentTasks.filter((task) => task.taskId !== taskId)
     );
     setSelectedTaskIds((currentIds) => {
       const nextIds = new Set(currentIds);
@@ -721,7 +890,9 @@ function App() {
 
   function clearCompletedTasks() {
     const completedTaskIds = new Set(
-      tasks.filter((task) => task.status === "completed").map((task) => task.id)
+      tasks
+        .filter((task) => task.status === "completed")
+        .map((task) => task.taskId)
     );
     setTasks((currentTasks) =>
       currentTasks.filter((task) => task.status !== "completed")
@@ -742,10 +913,10 @@ function App() {
       return;
     }
 
-    const taskIds = new Set(mergeTasks.map((task) => task.id));
+    const taskIds = new Set(mergeTasks.map((task) => task.taskId));
     setTasks((currentTasks) =>
       currentTasks.map((task) =>
-        taskIds.has(task.id)
+        taskIds.has(task.taskId)
           ? {
               ...task,
               status: "converting",
@@ -779,7 +950,7 @@ function App() {
 
       setTasks((currentTasks) =>
         currentTasks.map((task) =>
-          taskIds.has(task.id)
+          taskIds.has(task.taskId)
             ? {
                 ...task,
                 status: result.success ? "completed" : "failed",
@@ -799,7 +970,7 @@ function App() {
         error instanceof Error ? error.message : "PDF 合并失败。";
       setTasks((currentTasks) =>
         currentTasks.map((task) =>
-          taskIds.has(task.id)
+          taskIds.has(task.taskId)
             ? {
                 ...task,
                 status: "failed",
@@ -822,7 +993,7 @@ function App() {
 
     setTasks((currentTasks) =>
       currentTasks.map((currentTask) =>
-        currentTask.id === task.id
+        currentTask.taskId === task.taskId
           ? {
               ...currentTask,
               status: "converting",
@@ -847,7 +1018,7 @@ function App() {
 
       setTasks((currentTasks) =>
         currentTasks.map((currentTask) =>
-          currentTask.id === task.id
+          currentTask.taskId === task.taskId
             ? {
                 ...currentTask,
                 status: result.success ? "completed" : "failed",
@@ -867,7 +1038,7 @@ function App() {
         error instanceof Error ? error.message : "PDF 拆分失败。";
       setTasks((currentTasks) =>
         currentTasks.map((currentTask) =>
-          currentTask.id === task.id
+          currentTask.taskId === task.taskId
             ? {
                 ...currentTask,
                 status: "failed",
@@ -896,7 +1067,7 @@ function App() {
 
     setTasks((currentTasks) =>
       currentTasks.map((currentTask) =>
-        currentTask.id === task.id
+        currentTask.taskId === task.taskId
           ? {
               ...currentTask,
               status: "converting",
@@ -929,7 +1100,7 @@ function App() {
 
       setTasks((currentTasks) =>
         currentTasks.map((currentTask) =>
-          currentTask.id === task.id
+          currentTask.taskId === task.taskId
             ? {
                 ...currentTask,
                 status: result.success ? "completed" : "failed",
@@ -949,7 +1120,7 @@ function App() {
         error instanceof Error ? error.message : "PDF 页面提取失败。";
       setTasks((currentTasks) =>
         currentTasks.map((currentTask) =>
-          currentTask.id === task.id
+          currentTask.taskId === task.taskId
             ? {
                 ...currentTask,
                 status: "failed",
@@ -972,7 +1143,7 @@ function App() {
 
     setTasks((currentTasks) =>
       currentTasks.map((currentTask) =>
-        currentTask.id === task.id
+        currentTask.taskId === task.taskId
           ? {
               ...currentTask,
               status: "converting",
@@ -1006,7 +1177,7 @@ function App() {
 
       setTasks((currentTasks) =>
         currentTasks.map((currentTask) =>
-          currentTask.id === task.id
+          currentTask.taskId === task.taskId
             ? {
                 ...currentTask,
                 status: result.success ? "completed" : "failed",
@@ -1026,7 +1197,7 @@ function App() {
         error instanceof Error ? error.message : "PDF 旋转失败。";
       setTasks((currentTasks) =>
         currentTasks.map((currentTask) =>
-          currentTask.id === task.id
+          currentTask.taskId === task.taskId
             ? {
                 ...currentTask,
                 status: "failed",
@@ -1046,11 +1217,11 @@ function App() {
     }
 
     const conversionTasks = selectedRealLocalImageTasks;
-    const taskIds = new Set(conversionTasks.map((task) => task.id));
+    const taskIds = new Set(conversionTasks.map((task) => task.taskId));
     const targetFormat = imageTargetFormat;
     setTasks((currentTasks) =>
       currentTasks.map((task) =>
-        taskIds.has(task.id)
+        taskIds.has(task.taskId)
           ? {
               ...task,
               status: "converting",
@@ -1087,7 +1258,7 @@ function App() {
 
         setTasks((currentTasks) =>
           currentTasks.map((currentTask) =>
-            currentTask.id === task.id
+            currentTask.taskId === task.taskId
               ? {
                   ...currentTask,
                   status: result.success ? "completed" : "failed",
@@ -1103,7 +1274,7 @@ function App() {
           error instanceof Error ? error.message : "图片转换失败。";
         setTasks((currentTasks) =>
           currentTasks.map((currentTask) =>
-            currentTask.id === task.id
+            currentTask.taskId === task.taskId
               ? {
                   ...currentTask,
                   status: "failed",
@@ -1212,10 +1383,10 @@ function App() {
           >
             <div>
               <h3>将文件拖到这里，或点击选择文件。</h3>
-              <p>仅保存名称、大小、扩展名和显示路径。</p>
+              <p>原生入口仅读取本地路径和文件元数据，不读取文件内容。</p>
             </div>
             <div className="button-row">
-              <button type="button" onClick={() => fileInputRef.current?.click()}>
+              <button type="button" onClick={() => void selectNativeFiles()}>
                 选择文件
               </button>
               <button
@@ -1223,7 +1394,7 @@ function App() {
                 className="secondary-button"
                 onClick={() =>
                   setFolderMessage(
-                    "文件夹选择将在转换流程完成后，通过原生 Tauri 权限启用。"
+                    "文件夹批量导入尚未启用。当前请使用“选择文件”或将文件直接拖入窗口。"
                   )
                 }
               >
@@ -1239,6 +1410,7 @@ function App() {
             />
           </section>
 
+          {intakeMessage ? <p className="inline-note">{intakeMessage}</p> : null}
           {folderMessage ? <p className="inline-note">{folderMessage}</p> : null}
 
           <section className="status-summary" aria-label="任务状态汇总">
@@ -1486,12 +1658,12 @@ function App() {
                   <span>操作</span>
                 </div>
                 {tasks.map((task) => (
-                  <article className="task-row" role="row" key={task.id}>
+                  <article className="task-row" role="row" key={task.taskId}>
                     <label className="select-cell" aria-label={`选择 ${task.displayName}`}>
                       <input
                         type="checkbox"
-                        checked={selectedTaskIds.has(task.id)}
-                        onChange={() => toggleTaskSelection(task.id)}
+                        checked={selectedTaskIds.has(task.taskId)}
+                        onChange={() => toggleTaskSelection(task.taskId)}
                       />
                     </label>
                     <div className="file-cell">
@@ -1505,17 +1677,26 @@ function App() {
                     </span>
                     <div className="output-cell" title={task.outputPreview}>
                       <span>{task.outputPreview}</span>
-                      <small className={task.sourcePath ? "" : "path-warning"}>
-                        {task.sourcePath
-                          ? task.sourcePreview
-                          : `${task.sourcePreview} · 仅显示元数据`}
+                      <small
+                        className={
+                          task.sourceKind === "native-path" ? "" : "path-warning"
+                        }
+                        title={
+                          task.sourceKind === "native-path"
+                            ? task.sourcePreview
+                            : "只有预览元数据；真实 PDF 和图片工具需要原生本地路径。"
+                        }
+                      >
+                        {task.sourceKind === "native-path"
+                          ? `${task.sourcePreview} · 原生本地路径`
+                          : `${task.sourcePreview} · 仅有预览元数据，真实工具需要本地路径`}
                       </small>
                     </div>
                     <div className="task-actions">
                       <button
                         type="button"
                         className="small-button"
-                        onClick={() => cancelTask(task.id)}
+                        onClick={() => cancelTask(task.taskId)}
                         disabled={
                           task.status === "completed" ||
                           task.status === "cancelled"
@@ -1526,7 +1707,7 @@ function App() {
                       <button
                         type="button"
                         className="small-button"
-                        onClick={() => retryTask(task.id)}
+                        onClick={() => retryTask(task.taskId)}
                         disabled={task.status !== "failed"}
                       >
                         重试
@@ -1534,7 +1715,7 @@ function App() {
                       <button
                         type="button"
                         className="small-button ghost-button"
-                        onClick={() => removeTask(task.id)}
+                        onClick={() => removeTask(task.taskId)}
                       >
                         移除
                       </button>
