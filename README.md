@@ -258,9 +258,11 @@ Packaging should focus on a complete offline installer:
 - Use Tauri `externalBin` for executable sidecars.
 - Use Tauri `resources` for LibreOffice runtime folders, PDFium libraries, fonts, and license files.
 - Bundle sidecar conversion engines into the app package.
+- Bundle every license, notice, and build notice required by each included sidecar under the installed application's `licenses` resource directory.
 - Resolve engine paths from the installed application bundle.
 - Include all runtime files needed for supported v1 conversions.
-- Run `src-tauri/scripts/verify-engines.mjs` before release packaging.
+- Run `src-tauri/scripts/verify-engines.mjs` as a required Tauri pre-bundle gate; fail when a current bundled asset, SHA-256 digest, executable permission, or required license file is invalid.
+- Keep current bundled build requirements separate from future planned engines so an unavailable future engine does not fail today's supported package.
 - Run `src-tauri/scripts/prepare-sidecars.mjs` before release packaging.
 - Keep startup engine self-checks bounded by per-engine timeouts and fail open to the main workbench with visible local diagnostics.
 - Verify required files exist before enabling conversion actions.

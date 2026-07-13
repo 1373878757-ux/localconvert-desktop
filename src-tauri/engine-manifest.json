@@ -25,6 +25,32 @@
     "android-aarch64",
     "ios-aarch64"
   ],
+  "buildVerification": {
+    "requiredBundledAssets": {
+      "macos-aarch64": [
+        {
+          "name": "qpdf",
+          "type": "sidecar",
+          "requiredLicenseFiles": [
+            "src-tauri/resources/licenses/qpdf-12.3.2-LICENSE.txt",
+            "src-tauri/resources/licenses/qpdf-12.3.2-NOTICE.md",
+            "src-tauri/resources/licenses/qpdf-macos-aarch64-BUILD-NOTICE.txt"
+          ]
+        },
+        {
+          "name": "image-engine",
+          "type": "sidecar",
+          "requiredLicenseFiles": [
+            "src-tauri/resources/licenses/image-engine-macos-aarch64-BUILD-NOTICE.txt"
+          ]
+        }
+      ]
+    },
+    "plannedOnlyEngines": [
+      "libreoffice",
+      "pdfium"
+    ]
+  },
   "rules": {
     "fullBundledEngineEdition": "desktop-only",
     "mobileOfficeConversion": "Do not promise LibreOffice-based Office conversion on Android or iOS.",

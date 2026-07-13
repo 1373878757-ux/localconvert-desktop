@@ -25,6 +25,7 @@ Bundled qpdf license files:
 - src-tauri/resources/licenses/qpdf-12.3.2-LICENSE.txt
 - src-tauri/resources/licenses/qpdf-12.3.2-NOTICE.md
 
-This integration enables qpdf engine detection and version smoke checking only.
-PDF output-writing operations remain disabled until explicitly enabled in a
-future implementation step.
+This integration enables local qpdf engine detection, bounded startup smoke
+checking, PDF merge, PDF split, selected-page extraction, and page rotation.
+All enabled operations use argument arrays, task-owned temporary outputs, and
+atomic no-overwrite publication without modifying source files.

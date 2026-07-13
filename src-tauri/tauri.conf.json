@@ -5,6 +5,7 @@
   "identifier": "com.localconvert.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
+    "beforeBundleCommand": "node src-tauri/scripts/verify-engines.mjs",
     "devUrl": "http://localhost:5173",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
@@ -45,7 +46,10 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "resources": ["engine-manifest.json"],
+    "resources": {
+      "engine-manifest.json": "engine-manifest.json",
+      "resources/licenses/": "licenses/"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

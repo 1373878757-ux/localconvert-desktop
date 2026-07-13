@@ -17,6 +17,8 @@
 - Restricted failure and cancellation cleanup to task-owned temporary paths so pre-existing or concurrently created final files are never deleted.
 - Added three-second per-engine startup smoke-check timeouts with child-process cleanup and fail-open main-window handoff.
 - Stored startup engine timeout and failure diagnostics for the existing engine status and error panels.
+- Bundled qpdf and image-engine license/notice resources into the installed application.
+- Added a manifest-driven pre-bundle verification gate for required sidecars, SHA-256 digests, executable permissions, and license files.
 
 ### Unchanged
 
