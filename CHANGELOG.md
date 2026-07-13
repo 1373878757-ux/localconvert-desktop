@@ -2,7 +2,17 @@
 
 ## Unreleased
 
-### Preview 0.2 - Minimal Image Conversion
+### Preview 0.3 - Image Resize Preview
+
+- Aligned application version metadata to `0.3.0` for the Preview 0.3 development line.
+- Added local aspect-ratio-preserving resize planning for JPG/JPEG, PNG, and WebP using the existing first-party Rust `image-engine`.
+- Added fit-within-bounds, width-only, and height-only modes with no upscaling.
+- Added explicit 16,384-pixel edge and 64,000,000-pixel result limits.
+- Kept real resize execution behind native local paths, the backend task registry, cancellation, task-owned temporary outputs, validation, and atomic no-overwrite publication.
+- Kept HEIC, AVIF, TIFF/TIF, compression, metadata removal, and images-to-PDF disabled.
+- Kept existing image conversion and qpdf PDF operation behavior unchanged.
+
+## Preview 0.2.0 - Minimal Image Conversion
 
 - Aligned application version metadata to `0.2.0` for the Preview 0.2 development line.
 - Formalized the enabled local conversion matrix: JPG/JPEG to PNG or WebP, PNG to JPG or WebP, and WebP to JPG or PNG.

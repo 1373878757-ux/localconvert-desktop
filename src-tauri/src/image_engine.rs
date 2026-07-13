@@ -429,7 +429,7 @@ mod tests {
         let detection = detect_image_engine_from_candidates(
             "macos-aarch64",
             std::slice::from_ref(&fixture),
-            |_| Ok("LocalConvert image-engine 0.2.0-preview.2".to_string()),
+            |_| Ok("LocalConvert image-engine 0.3.0-preview.0".to_string()),
         );
 
         assert_eq!(detection.status, "available");
@@ -502,6 +502,6 @@ mod tests {
         let detection = detect_image_engine("macos-aarch64");
 
         assert_eq!(detection.status, "available");
-        assert!(detection.message.contains("0.2.0-preview.2"));
+        assert!(detection.message.contains("0.3.0-preview.0"));
     }
 }

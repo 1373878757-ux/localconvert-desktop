@@ -1,7 +1,7 @@
 LocalConvert Desktop image-engine sidecar notice
 
 Engine: image-engine
-Version: 0.2.0-preview.2
+Version: 0.3.0-preview.0
 Platform: macos-aarch64
 License: First-party LocalConvert Desktop sidecar with third-party Rust codec dependencies
 
@@ -13,13 +13,20 @@ src-tauri/binaries/macos-aarch64/image-engine
 
 Build notes:
 This image-engine command-line sidecar is first-party Rust code for LocalConvert Desktop.
-It supports --version, --self-check, and local conversion between JPG/JPEG, PNG, and WebP.
-JPEG and WebP orientation metadata exposed by the decoder is applied before output encoding;
+It supports --version, --self-check, local conversion between JPG/JPEG, PNG, and WebP,
+and aspect-ratio-preserving local resize for those formats. Resize supports fit, width-only,
+and height-only modes, never upscales, and enforces 16,384-pixel edge and 64,000,000-pixel limits.
+JPEG and WebP orientation metadata exposed by the decoder is applied before conversion or resize;
 stale orientation metadata is not copied to the output.
-The conversion command reads only the requested local source image and writes only the requested
-collision-safe output path. It does not contain upload, cloud, server, or telemetry code.
+The conversion and resize commands read only the requested local source image and write only the
+requested collision-safe output path. They do not contain upload, cloud, server, or telemetry code.
 
-Third-party Rust codec dependencies linked into this sidecar:
+Third-party Rust dependencies linked into this sidecar:
+- serde 1.0.228: MIT OR Apache-2.0
+- serde_json 1.0.150: MIT OR Apache-2.0
+- itoa 1.0.18: MIT OR Apache-2.0
+- memchr 2.8.2: Unlicense OR MIT
+- zmij 1.0.21: MIT
 - image 0.25.10: MIT OR Apache-2.0
 - bytemuck 1.25.0: Zlib OR Apache-2.0 OR MIT
 - byteorder-lite 0.1.0: Unlicense OR MIT

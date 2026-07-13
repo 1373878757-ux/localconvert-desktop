@@ -15,6 +15,8 @@ use std::{
 };
 
 const IMAGE_CONVERT_TIMEOUT_SECONDS: u64 = 120;
+const MAX_RESIZE_DIMENSION: u32 = 16_384;
+const MAX_RESIZE_PIXELS: u64 = 64_000_000;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -40,6 +42,67 @@ pub struct ImageConvertResult {
     exit_code: Option<i32>,
     timed_out: bool,
     message: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageResizeExecutionRequest {
+    source: String,
+    mode: String,
+    max_width: Option<u32>,
+    max_height: Option<u32>,
+}
+
+#[derive(Serialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageResizeResult {
+    success: bool,
+    operation: &'static str,
+    source_path: String,
+    output_path: String,
+    source_format: String,
+    mode: String,
+    max_width: Option<u32>,
+    max_height: Option<u32>,
+    source_width: u32,
+    source_height: u32,
+    output_width: u32,
+    output_height: u32,
+    resized: bool,
+    output_bytes: u64,
+    stdout: String,
+    stderr: String,
+    exit_code: Option<i32>,
+    timed_out: bool,
+    message: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ResizeMode {
+    Fit,
+    Width,
+    Height,
+}
+
+#[derive(Deserialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct ImageResizeSidecarReport {
+    operation: String,
+    mode: String,
+    source_width: u32,
+    source_height: u32,
+    output_width: u32,
+    output_height: u32,
+    resized: bool,
+    upscaled: bool,
+}
+
+struct ResizeFailureContext<'a> {
+    source_path: &'a Path,
+    output_path: &'a Path,
+    source_format: &'a str,
+    mode: ResizeMode,
+    request: &'a ImageResizeExecutionRequest,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -81,6 +144,50 @@ pub(crate) fn image_convert_task(
             output_bytes: 0,
             width: 0,
             height: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: None,
+            timed_out: false,
+            message,
+        });
+    if control.is_cancelled() {
+        result.mark_cancelled();
+    }
+    result
+}
+
+#[cfg(test)]
+pub fn image_resize_file(request: ImageResizeExecutionRequest) -> ImageResizeResult {
+    image_resize_task(request, TaskControl::detached("image-resize"))
+}
+
+pub(crate) fn image_resize_task(
+    request: ImageResizeExecutionRequest,
+    control: TaskControl,
+) -> ImageResizeResult {
+    let source_path = request.source.trim().to_string();
+    let source_format = source_format_from_path(Path::new(&source_path)).unwrap_or_default();
+    let mode = normalize_resize_mode(&request.mode)
+        .map(ResizeMode::as_str)
+        .unwrap_or_default()
+        .to_string();
+
+    let mut result =
+        execute_image_resize(&request, &control).unwrap_or_else(|message| ImageResizeResult {
+            success: false,
+            operation: "resize",
+            source_path,
+            output_path: String::new(),
+            source_format,
+            mode,
+            max_width: request.max_width,
+            max_height: request.max_height,
+            source_width: 0,
+            source_height: 0,
+            output_width: 0,
+            output_height: 0,
+            resized: false,
+            output_bytes: 0,
             stdout: String::new(),
             stderr: String::new(),
             exit_code: None,
@@ -265,6 +372,193 @@ fn execute_image_convert(
     })
 }
 
+fn execute_image_resize(
+    request: &ImageResizeExecutionRequest,
+    control: &TaskControl,
+) -> Result<ImageResizeResult, String> {
+    if control.is_cancelled() {
+        return Err("Image resize task was cancelled before execution.".to_string());
+    }
+
+    let source_path = validate_source_image(&request.source)?;
+    let source_format = source_format_from_path(&source_path)?;
+    let output_extension = resize_output_extension(&source_path)?;
+    let mode = normalize_resize_mode(&request.mode)?;
+    validate_resize_dimensions(mode, request.max_width, request.max_height)?;
+
+    let planned_output =
+        image_ops::plan_image_output(&path_to_string(&source_path), &output_extension)?;
+    let converted_folder = PathBuf::from(&planned_output.planned_converted_folder_path);
+    let output_path = PathBuf::from(&planned_output.planned_output_path);
+    validate_planned_output_location(&source_path, &converted_folder, &output_path)?;
+
+    let image_engine_path =
+        image_engine::resolve_image_engine_sidecar_path(image_engine::current_platform_key())?;
+    let workspace = TaskOutputWorkspace::create(&converted_folder, control.task_id())?;
+    let temp_output = workspace.temp_file(&format!("output.{output_extension}"))?;
+    let plan = build_image_resize_arguments(
+        &source_path,
+        &temp_output,
+        mode,
+        request.max_width,
+        request.max_height,
+    )?;
+    let execution = run_image_engine_command(
+        &image_engine_path,
+        &plan.arguments,
+        Duration::from_secs(IMAGE_CONVERT_TIMEOUT_SECONDS),
+        control,
+    )?;
+    let failure_context = ResizeFailureContext {
+        source_path: &source_path,
+        output_path: &output_path,
+        source_format: &source_format,
+        mode,
+        request,
+    };
+
+    if execution.cancelled || control.is_cancelled() {
+        return Ok(resize_failure_result(
+            &failure_context,
+            Some(&execution),
+            false,
+            "Image resize task was cancelled locally.",
+        ));
+    }
+
+    if execution.timed_out {
+        return Ok(resize_failure_result(
+            &failure_context,
+            Some(&execution),
+            true,
+            &format!(
+                "image-engine resize timed out after {IMAGE_CONVERT_TIMEOUT_SECONDS} seconds."
+            ),
+        ));
+    }
+
+    if execution.exit_code != Some(0) {
+        return Ok(resize_failure_result(
+            &failure_context,
+            Some(&execution),
+            false,
+            "image-engine resize failed.",
+        ));
+    }
+
+    let report = match parse_resize_sidecar_report(&execution.stdout, mode) {
+        Ok(report) => report,
+        Err(message) => {
+            return Ok(resize_failure_result(
+                &failure_context,
+                Some(&execution),
+                false,
+                &message,
+            ));
+        }
+    };
+    let (_, output_width, output_height) = match validate_output_image(&temp_output) {
+        Ok(output) => output,
+        Err(message) => {
+            return Ok(resize_failure_result(
+                &failure_context,
+                Some(&execution),
+                false,
+                &message,
+            ));
+        }
+    };
+    if (report.output_width, report.output_height) != (output_width, output_height) {
+        return Ok(resize_failure_result(
+            &failure_context,
+            Some(&execution),
+            false,
+            "image-engine resize report does not match the validated output dimensions.",
+        ));
+    }
+
+    let finalized =
+        match control.commit_outputs(|| workspace.finalize_file(&temp_output, &output_path)) {
+            Ok(finalized) => finalized,
+            Err(TaskCommitError::Cancelled) => {
+                return Ok(resize_failure_result(
+                    &failure_context,
+                    Some(&execution),
+                    false,
+                    "Image resize task was cancelled before output finalization.",
+                ));
+            }
+            Err(TaskCommitError::Finalize(message)) => {
+                return Ok(resize_failure_result(
+                    &failure_context,
+                    Some(&execution),
+                    false,
+                    &message,
+                ));
+            }
+        };
+
+    Ok(ImageResizeResult {
+        success: true,
+        operation: "resize",
+        source_path: path_to_string(&source_path),
+        output_path: path_to_string(&output_path),
+        source_format,
+        mode: mode.as_str().to_string(),
+        max_width: request.max_width,
+        max_height: request.max_height,
+        source_width: report.source_width,
+        source_height: report.source_height,
+        output_width: report.output_width,
+        output_height: report.output_height,
+        resized: report.resized,
+        output_bytes: finalized.bytes,
+        stdout: execution.stdout,
+        stderr: execution.stderr,
+        exit_code: execution.exit_code,
+        timed_out: false,
+        message: if report.resized {
+            "Image resize completed locally with bundled image-engine.".to_string()
+        } else {
+            "Image resize completed locally without upscaling; the oriented source dimensions were kept."
+                .to_string()
+        },
+    })
+}
+
+fn resize_failure_result(
+    context: &ResizeFailureContext<'_>,
+    execution: Option<&ImageEngineExecutionResult>,
+    timed_out: bool,
+    message: &str,
+) -> ImageResizeResult {
+    ImageResizeResult {
+        success: false,
+        operation: "resize",
+        source_path: path_to_string(context.source_path),
+        output_path: path_to_string(context.output_path),
+        source_format: context.source_format.to_string(),
+        mode: context.mode.as_str().to_string(),
+        max_width: context.request.max_width,
+        max_height: context.request.max_height,
+        source_width: 0,
+        source_height: 0,
+        output_width: 0,
+        output_height: 0,
+        resized: false,
+        output_bytes: 0,
+        stdout: execution
+            .map(|execution| execution.stdout.clone())
+            .unwrap_or_default(),
+        stderr: execution
+            .map(|execution| execution.stderr.clone())
+            .unwrap_or_default(),
+        exit_code: execution.and_then(|execution| execution.exit_code),
+        timed_out,
+        message: message.to_string(),
+    }
+}
+
 impl ImageConvertResult {
     pub(crate) fn succeeded(&self) -> bool {
         self.success
@@ -276,6 +570,23 @@ impl ImageConvertResult {
         self.width = 0;
         self.height = 0;
         self.message = "Image conversion task was cancelled locally.".to_string();
+    }
+}
+
+impl ImageResizeResult {
+    pub(crate) fn succeeded(&self) -> bool {
+        self.success
+    }
+
+    pub(crate) fn mark_cancelled(&mut self) {
+        self.success = false;
+        self.source_width = 0;
+        self.source_height = 0;
+        self.output_width = 0;
+        self.output_height = 0;
+        self.resized = false;
+        self.output_bytes = 0;
+        self.message = "Image resize task was cancelled locally.".to_string();
     }
 }
 
@@ -346,6 +657,74 @@ fn normalize_target_format(target_format: &str) -> Result<String, String> {
     }
 }
 
+impl ResizeMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Fit => "fit",
+            Self::Width => "width",
+            Self::Height => "height",
+        }
+    }
+}
+
+fn normalize_resize_mode(mode: &str) -> Result<ResizeMode, String> {
+    match mode.trim() {
+        "fit" => Ok(ResizeMode::Fit),
+        "width" => Ok(ResizeMode::Width),
+        "height" => Ok(ResizeMode::Height),
+        _ => Err("Image resize mode must be fit, width, or height.".to_string()),
+    }
+}
+
+fn validate_resize_dimensions(
+    mode: ResizeMode,
+    max_width: Option<u32>,
+    max_height: Option<u32>,
+) -> Result<(), String> {
+    if matches!(max_width, Some(0)) || matches!(max_height, Some(0)) {
+        return Err("Image resize dimensions must be greater than zero.".to_string());
+    }
+    if max_width.is_some_and(|width| width > MAX_RESIZE_DIMENSION)
+        || max_height.is_some_and(|height| height > MAX_RESIZE_DIMENSION)
+    {
+        return Err(format!(
+            "Image resize dimensions must not exceed {MAX_RESIZE_DIMENSION} pixels per edge."
+        ));
+    }
+
+    match (mode, max_width, max_height) {
+        (ResizeMode::Fit, Some(width), Some(height)) => {
+            if u64::from(width) * u64::from(height) > MAX_RESIZE_PIXELS {
+                return Err(format!(
+                    "Image resize bounds exceed the {MAX_RESIZE_PIXELS}-pixel safety limit."
+                ));
+            }
+            Ok(())
+        }
+        (ResizeMode::Width, Some(_), None) | (ResizeMode::Height, None, Some(_)) => Ok(()),
+        (ResizeMode::Fit, _, _) => {
+            Err("Fit resize mode requires both maxWidth and maxHeight.".to_string())
+        }
+        (ResizeMode::Width, _, _) => {
+            Err("Width-only resize mode requires only maxWidth.".to_string())
+        }
+        (ResizeMode::Height, _, _) => {
+            Err("Height-only resize mode requires only maxHeight.".to_string())
+        }
+    }
+}
+
+fn resize_output_extension(source_path: &Path) -> Result<String, String> {
+    source_format_from_path(source_path)?;
+    source_path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::trim)
+        .filter(|extension| !extension.is_empty())
+        .map(str::to_ascii_lowercase)
+        .ok_or_else(|| "Source image must include a supported file extension.".to_string())
+}
+
 fn validate_planned_output_location(
     source_path: &Path,
     converted_folder: &Path,
@@ -395,6 +774,89 @@ fn build_image_convert_arguments(
             OsString::from(target_format),
         ],
     })
+}
+
+fn build_image_resize_arguments(
+    source_path: &Path,
+    output_path: &Path,
+    mode: ResizeMode,
+    max_width: Option<u32>,
+    max_height: Option<u32>,
+) -> Result<ImageEngineCommandPlan, String> {
+    let source_extension = resize_output_extension(source_path)?;
+    validate_resize_dimensions(mode, max_width, max_height)?;
+    if output_path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_none_or(|extension| !extension.eq_ignore_ascii_case(&source_extension))
+    {
+        return Err("Resize output extension must match the source image extension.".to_string());
+    }
+
+    let mut arguments = vec![
+        OsString::from("resize"),
+        OsString::from("--input"),
+        source_path.as_os_str().to_os_string(),
+        OsString::from("--output"),
+        output_path.as_os_str().to_os_string(),
+        OsString::from("--mode"),
+        OsString::from(mode.as_str()),
+    ];
+    if let Some(width) = max_width {
+        arguments.push(OsString::from("--max-width"));
+        arguments.push(OsString::from(width.to_string()));
+    }
+    if let Some(height) = max_height {
+        arguments.push(OsString::from("--max-height"));
+        arguments.push(OsString::from(height.to_string()));
+    }
+
+    Ok(ImageEngineCommandPlan {
+        executable: "image-engine",
+        arguments,
+    })
+}
+
+fn parse_resize_sidecar_report(
+    stdout: &str,
+    expected_mode: ResizeMode,
+) -> Result<ImageResizeSidecarReport, String> {
+    let report: ImageResizeSidecarReport = serde_json::from_str(stdout.trim())
+        .map_err(|error| format!("image-engine resize returned an invalid report: {error}"))?;
+    if report.operation != "resize" || report.mode != expected_mode.as_str() {
+        return Err(
+            "image-engine resize report does not match the requested operation.".to_string(),
+        );
+    }
+    if report.source_width == 0
+        || report.source_height == 0
+        || report.output_width == 0
+        || report.output_height == 0
+    {
+        return Err("image-engine resize report contains invalid dimensions.".to_string());
+    }
+    if report.upscaled {
+        return Err("image-engine resize reported an unsafe upscale operation.".to_string());
+    }
+    if report.output_width > report.source_width || report.output_height > report.source_height {
+        return Err(
+            "image-engine resize output exceeds the oriented source dimensions.".to_string(),
+        );
+    }
+    if report.output_width > MAX_RESIZE_DIMENSION
+        || report.output_height > MAX_RESIZE_DIMENSION
+        || u64::from(report.output_width) * u64::from(report.output_height) > MAX_RESIZE_PIXELS
+    {
+        return Err("image-engine resize output exceeds the configured safety limits.".to_string());
+    }
+    if report.resized
+        != ((report.source_width, report.source_height)
+            != (report.output_width, report.output_height))
+    {
+        return Err("image-engine resize report has an inconsistent resized flag.".to_string());
+    }
+
+    Ok(report)
 }
 
 fn run_image_engine_command(
@@ -583,6 +1045,57 @@ mod tests {
     }
 
     #[test]
+    fn validates_resize_modes_limits_and_argument_arrays() {
+        assert!(validate_resize_dimensions(ResizeMode::Fit, Some(1600), Some(1200)).is_ok());
+        assert!(validate_resize_dimensions(ResizeMode::Width, Some(1600), None).is_ok());
+        assert!(validate_resize_dimensions(ResizeMode::Height, None, Some(1200)).is_ok());
+        assert!(validate_resize_dimensions(ResizeMode::Fit, Some(1600), None).is_err());
+        assert!(validate_resize_dimensions(ResizeMode::Width, Some(0), None).is_err());
+        assert!(validate_resize_dimensions(ResizeMode::Width, Some(16_385), None).is_err());
+        assert!(validate_resize_dimensions(ResizeMode::Fit, Some(10_000), Some(10_000)).is_err());
+
+        let source = Path::new("/Users/mac/客户 图片/input one.jpeg");
+        let output = Path::new("/Users/mac/客户 图片/converted/input one.jpeg");
+        let plan =
+            build_image_resize_arguments(source, output, ResizeMode::Fit, Some(1600), Some(1200))
+                .expect("resize argument plan should be valid");
+
+        assert_eq!(plan.executable, "image-engine");
+        assert_eq!(
+            plan.arguments,
+            vec![
+                OsString::from("resize"),
+                OsString::from("--input"),
+                source.as_os_str().to_os_string(),
+                OsString::from("--output"),
+                output.as_os_str().to_os_string(),
+                OsString::from("--mode"),
+                OsString::from("fit"),
+                OsString::from("--max-width"),
+                OsString::from("1600"),
+                OsString::from("--max-height"),
+                OsString::from("1200"),
+            ]
+        );
+    }
+
+    #[test]
+    fn validates_structured_resize_sidecar_report() {
+        let report = parse_resize_sidecar_report(
+            r#"{"operation":"resize","mode":"width","sourceWidth":400,"sourceHeight":200,"outputWidth":100,"outputHeight":50,"resized":true,"upscaled":false}"#,
+            ResizeMode::Width,
+        )
+        .expect("valid resize report should parse");
+        assert_eq!((report.output_width, report.output_height), (100, 50));
+
+        assert!(parse_resize_sidecar_report(
+            r#"{"operation":"resize","mode":"width","sourceWidth":100,"sourceHeight":50,"outputWidth":200,"outputHeight":100,"resized":true,"upscaled":true}"#,
+            ResizeMode::Width,
+        )
+        .is_err());
+    }
+
+    #[test]
     fn rejects_missing_non_image_and_same_format_requests() {
         let missing = image_convert_file(ImageConvertExecutionRequest {
             source: "/missing/source.png".to_string(),
@@ -625,6 +1138,27 @@ mod tests {
     }
 
     #[test]
+    fn rejects_heic_resize_before_creating_output_folder() {
+        let case_dir = temp_case_dir("heic-resize-disabled");
+        fs::create_dir_all(&case_dir).expect("test directory should be created");
+        let source = case_dir.join("手机 照片.heic");
+        fs::write(&source, b"not-decoded").expect("HEIC placeholder should be written");
+
+        let result = image_resize_file(ImageResizeExecutionRequest {
+            source: path_to_string(&source),
+            mode: "fit".to_string(),
+            max_width: Some(1200),
+            max_height: Some(1200),
+        });
+
+        assert!(!result.success);
+        assert!(result.message.contains("planned but not enabled"));
+        assert!(!case_dir.join("converted").exists());
+
+        let _ = fs::remove_dir_all(case_dir);
+    }
+
+    #[test]
     fn cancelled_image_task_does_not_start_or_create_output_folder() {
         let case_dir = temp_case_dir("cancel-before-start");
         fs::create_dir_all(&case_dir).expect("test directory should be created");
@@ -651,6 +1185,42 @@ mod tests {
         assert!(result.message.contains("cancelled locally"));
         assert_eq!(
             registry.status("image-cancel-before-start"),
+            Ok(BackendTaskStatus::Cancelled)
+        );
+        assert!(!case_dir.join("converted").exists());
+
+        let _ = fs::remove_dir_all(case_dir);
+    }
+
+    #[test]
+    fn cancelled_resize_task_does_not_start_or_create_output_folder() {
+        let case_dir = temp_case_dir("resize-cancel-before-start");
+        fs::create_dir_all(&case_dir).expect("test directory should be created");
+        let source = case_dir.join("cancel resize.png");
+        create_test_png(&source);
+
+        let registry = BackendTaskRegistry::default();
+        let control = registry
+            .register("resize-cancel-before-start", "image-resize")
+            .expect("resize task should register");
+        registry
+            .cancel("resize-cancel-before-start")
+            .expect("resize task should cancel");
+
+        let result = image_resize_task(
+            ImageResizeExecutionRequest {
+                source: path_to_string(&source),
+                mode: "width".to_string(),
+                max_width: Some(2),
+                max_height: None,
+            },
+            control,
+        );
+
+        assert!(!result.success);
+        assert!(result.message.contains("cancelled locally"));
+        assert_eq!(
+            registry.status("resize-cancel-before-start"),
             Ok(BackendTaskStatus::Cancelled)
         );
         assert!(!case_dir.join("converted").exists());
@@ -807,6 +1377,77 @@ mod tests {
             b"existing-user-output"
         );
         assert_image_format(Path::new(&result.output_path), ImageFormat::WebP);
+
+        let _ = fs::remove_dir_all(case_dir);
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[test]
+    fn bundled_sidecar_resizes_png_without_overwrite_or_source_changes() {
+        let case_dir = temp_case_dir("resize-end-to-end-collision").join("客户 文件 with spaces");
+        let converted_dir = case_dir.join("converted");
+        fs::create_dir_all(&converted_dir).expect("converted directory should be created");
+        let source = case_dir.join("图片 示例.png");
+        let source_before = create_test_png(&source);
+        let existing_output = converted_dir.join("图片 示例.png");
+        fs::write(&existing_output, b"existing-user-output")
+            .expect("existing output should be written");
+
+        let result = image_resize_file(ImageResizeExecutionRequest {
+            source: path_to_string(&source),
+            mode: "width".to_string(),
+            max_width: Some(2),
+            max_height: None,
+        });
+
+        assert!(result.success, "{}\n{}", result.message, result.stderr);
+        assert_eq!((result.source_width, result.source_height), (4, 3));
+        assert_eq!((result.output_width, result.output_height), (2, 1));
+        assert!(result.resized);
+        assert_eq!(
+            PathBuf::from(&result.output_path),
+            converted_dir.join("图片 示例 (1).png")
+        );
+        assert_eq!(
+            fs::read(&existing_output).expect("existing output should remain readable"),
+            b"existing-user-output"
+        );
+        assert_eq!(
+            fs::read(&source).expect("source should remain readable"),
+            source_before
+        );
+
+        let _ = fs::remove_dir_all(
+            case_dir
+                .parent()
+                .expect("smoke directory should have a cleanup parent"),
+        );
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[test]
+    fn bundled_sidecar_resize_does_not_upscale() {
+        let case_dir = temp_case_dir("resize-no-upscale");
+        fs::create_dir_all(&case_dir).expect("test directory should be created");
+        let source = case_dir.join("small.webp");
+        let source_before = create_test_rgb_image(&source, ImageFormat::WebP);
+
+        let result = image_resize_file(ImageResizeExecutionRequest {
+            source: path_to_string(&source),
+            mode: "fit".to_string(),
+            max_width: Some(1000),
+            max_height: Some(1000),
+        });
+
+        assert!(result.success, "{}\n{}", result.message, result.stderr);
+        assert_eq!((result.source_width, result.source_height), (5, 4));
+        assert_eq!((result.output_width, result.output_height), (5, 4));
+        assert!(!result.resized);
+        assert!(result.message.contains("without upscaling"));
+        assert_eq!(
+            fs::read(&source).expect("source should remain readable"),
+            source_before
+        );
 
         let _ = fs::remove_dir_all(case_dir);
     }

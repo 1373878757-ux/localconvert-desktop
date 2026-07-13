@@ -55,7 +55,9 @@ The v1 scope should prioritize these conversion groups:
 
 Format support should be expanded only when the local engine path, output validation, and packaging story are reliable.
 
-Preview 0.2 enables a minimal real local image conversion matrix on macOS Apple Silicon: JPG/JPEG to PNG or WebP, PNG to JPG or WebP, and WebP to JPG or PNG. A first-party Rust `image-engine` sidecar performs the conversion locally and is enabled only after its startup version and self-check validation pass. Real conversion requires Tauri-native local paths; browser-only `File` tasks remain metadata previews. Image batches fail closed when any selected item has no native path, uses an unsupported or same-as-target format, is cancelled, or is already running. The Rust backend validates requests, creates the source-adjacent `converted` folder at execution time, refuses overwrites, launches the sidecar with argument arrays, captures diagnostics, and validates the output before reporting success. JPEG and WebP orientation metadata exposed by the current decoder is applied to pixel data before encoding, and stale orientation metadata is not copied to the output. AVIF, TIFF/TIF, and HEIC remain disabled; image compression, resizing, metadata removal, and images-to-PDF are not enabled yet. The current engine does not decode HEIC or apply HEIC orientation metadata.
+Preview 0.3 keeps the Preview 0.2 local image conversion matrix and adds local image resizing for JPG/JPEG, PNG, and WebP on macOS Apple Silicon. Resize supports fitting within maximum width and height, width-only resizing with automatic height, and height-only resizing with automatic width. Aspect ratio is always preserved, the output keeps the source format and extension, and smaller images are never upscaled. When requested bounds are larger than the source, the engine writes a collision-safe output at the original oriented pixel dimensions and reports that no resize was required. Requested dimensions are limited to 16,384 pixels per edge and the resulting image is limited to 64,000,000 pixels.
+
+A first-party Rust `image-engine` sidecar performs conversion and resizing locally and is enabled only after its startup version and self-check validation pass. Real operations require Tauri-native local paths; browser-only `File` tasks remain metadata previews. Image batches fail closed when any selected item has no native path, uses an unsupported format, has invalid dimensions, is cancelled, or is already running. The Rust backend validates requests, creates the source-adjacent `converted` folder only at execution time, refuses overwrites, launches the sidecar with argument arrays, captures diagnostics, and validates the output before reporting success. JPEG and WebP orientation metadata exposed by the current decoder is applied to pixel data before conversion or resizing, and stale orientation metadata is not copied to the output. AVIF, TIFF/TIF, and HEIC remain disabled; image compression, metadata removal, and images-to-PDF are not enabled yet. The current engine does not decode HEIC or apply HEIC orientation metadata.
 
 ## Platform Matrix
 
@@ -227,7 +229,7 @@ Office rendering can differ from the source application's native output. The v1 
 
 ## Development Setup
 
-This repository includes a minimal Tauri v2, React, and TypeScript app scaffold for LocalConvert Desktop. The current implementation includes a Simplified Chinese app UI, branded startup splash screen, Tauri-native file selection and drag-and-drop intake, a local task queue, backend output path planning, the bundled macOS Apple Silicon qpdf sidecar, startup engine self-checks, real local PDF merge, split, page extraction, and rotate execution, and real local JPG/JPEG, PNG, and WebP conversion through the first-party Rust `image-engine` sidecar. Each startup engine smoke check has a three-second timeout; a failed, timed-out, or panicking check is stored as a local startup error and never prevents the main window from opening after the splash minimum display time. Real qpdf and image-engine jobs run through an asynchronous Rust task registry with task-ID status arbitration, child-process cancellation, task-owned temporary outputs, validated atomic no-overwrite publication, and scoped cleanup. Native desktop intake records validated absolute paths and reads filesystem metadata only; browser-only `File` fallback tasks remain metadata previews and cannot run real conversion operations. AVIF, TIFF/TIF, HEIC, image compression, resizing, metadata removal, images-to-PDF, Office conversion, and PDFium rasterization remain disabled until intentionally enabled in later implementation steps.
+This repository includes a Tauri v2, React, and TypeScript desktop app for LocalConvert Desktop. The current Preview 0.3 implementation includes a Simplified Chinese UI, branded startup splash screen, Tauri-native file selection and drag-and-drop intake, a local task queue, backend output path planning, the bundled macOS Apple Silicon qpdf sidecar, startup engine self-checks, real local PDF merge, split, page extraction, and rotate execution, and real local JPG/JPEG, PNG, and WebP conversion and resizing through the first-party Rust `image-engine` sidecar. Each startup engine smoke check has a three-second timeout; a failed, timed-out, or panicking check is stored as a local startup error and never prevents the main window from opening after the splash minimum display time. Real qpdf and image-engine jobs run through an asynchronous Rust task registry with task-ID status arbitration, child-process cancellation, task-owned temporary outputs, validated atomic no-overwrite publication, and scoped cleanup. Native desktop intake records validated absolute paths and reads filesystem metadata only; browser-only `File` fallback tasks remain metadata previews and cannot run real conversion operations. AVIF, TIFF/TIF, HEIC, image compression, metadata removal, images-to-PDF, Office conversion, and PDFium rasterization remain disabled until intentionally enabled in later implementation steps.
 
 Development machines need the normal Tauri v2 toolchain requirements for the target platform, including Node.js, npm, Rust 1.85 or newer, Cargo, and platform-specific build dependencies. Rust 1.85 is required by the pinned image codec dependency used to build the first-party `image-engine` sidecar.
 
@@ -294,7 +296,7 @@ Current qpdf PDF tools checklist:
 - Repeat at least one operation from a folder path containing spaces.
 - Repeat at least one operation when the planned output name already exists and confirm auto-incremented collision naming.
 - Hash or otherwise compare source files before and after each operation and confirm sources are unchanged.
-- Confirm Office, image compression/resizing/metadata tools, PDF rasterization, and preview tools remain disabled until their bundled engines or execution paths are intentionally added.
+- Confirm Office, image compression and metadata tools, PDF rasterization, and preview tools remain disabled until their bundled engines or execution paths are intentionally added.
 
 Current image conversion checklist:
 
@@ -304,7 +306,17 @@ Current image conversion checklist:
 - Repeat a conversion with a Chinese filename and a path containing spaces.
 - Create an output collision and confirm the backend selects an incremented name instead of overwriting it.
 - Hash or otherwise compare the source image before and after conversion and confirm it is unchanged.
-- Confirm AVIF, TIFF/TIF, HEIC, compression, resizing, metadata removal, and images-to-PDF remain disabled.
+- Confirm AVIF, TIFF/TIF, HEIC, compression, metadata removal, and images-to-PDF remain disabled.
+
+Current image resize checklist:
+
+- Resize a JPEG to fit within a maximum width and height and confirm the aspect ratio is preserved.
+- Resize a PNG by width only and a WebP by height only, confirming the missing dimension is calculated automatically.
+- Resize an oriented JPEG and confirm orientation is applied before the target dimensions are calculated.
+- Request bounds larger than the source and confirm the output keeps the original oriented dimensions instead of upscaling.
+- Reject zero, negative, non-integer, non-numeric, over-16,384, and over-64,000,000-pixel requests before starting the sidecar.
+- Confirm HEIC resize remains blocked before an output folder or process is created.
+- Confirm cancellation leaves no partial final output, collisions do not overwrite existing files, and the source hash remains unchanged.
 
 Office-to-PDF:
 
@@ -365,7 +377,7 @@ Path handling:
 
 - Implement the v1 local conversion queue and default output rules.
 - Add reliable Office-to-PDF conversion with isolated LibreOffice execution.
-- Add image conversion, compression presets, resizing, EXIF removal, and images-to-PDF.
+- Expand the current image conversion and resize preview with compression presets, EXIF removal, and images-to-PDF.
 - Add PDF merge, split, extraction, rotation, rasterization, and previews.
 - Add detailed per-task logs and batch summaries.
 - Add cross-platform packaging with bundled sidecar engines.

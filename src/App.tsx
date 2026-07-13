@@ -132,6 +132,28 @@ type ImageConvertResult = {
   message: string;
 };
 
+type ImageResizeResult = {
+  success: boolean;
+  operation: "resize";
+  sourcePath: string;
+  outputPath: string;
+  sourceFormat: string;
+  mode: ResizeMode;
+  maxWidth: number | null;
+  maxHeight: number | null;
+  sourceWidth: number;
+  sourceHeight: number;
+  outputWidth: number;
+  outputHeight: number;
+  resized: boolean;
+  outputBytes: number;
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+  timedOut: boolean;
+  message: string;
+};
+
 type BackendTaskStatus =
   | "queued"
   | "running"
@@ -156,6 +178,17 @@ type CancelTaskResponse = {
 };
 
 type EnabledImageFormat = "jpg" | "png" | "webp";
+type ResizeMode = "fit" | "width" | "height";
+
+type ResizeInputValidation = {
+  valid: boolean;
+  maxWidth?: number;
+  maxHeight?: number;
+  message: string;
+};
+
+const maxResizeDimension = 16_384;
+const maxResizePixels = 64_000_000;
 
 const fallbackSelfCheck: EngineSelfCheck = {
   platform: "桌面预览",
@@ -223,6 +256,75 @@ function createBackendTaskId(operation: string, taskId: string): string {
     .slice(2, 8)}`;
 }
 
+function parseResizeDimension(value: string, label: string) {
+  const normalized = value.trim();
+  if (!/^\d+$/.test(normalized)) {
+    return { value: undefined, message: `${label}必须是正整数。` };
+  }
+
+  const dimension = Number(normalized);
+  if (!Number.isSafeInteger(dimension) || dimension <= 0) {
+    return { value: undefined, message: `${label}必须大于 0。` };
+  }
+  if (dimension > maxResizeDimension) {
+    return {
+      value: undefined,
+      message: `${label}不能超过 ${maxResizeDimension} 像素。`
+    };
+  }
+
+  return { value: dimension, message: "" };
+}
+
+function validateResizeInputs(
+  mode: ResizeMode,
+  widthInput: string,
+  heightInput: string
+): ResizeInputValidation {
+  if (mode === "fit" || mode === "width") {
+    const width = parseResizeDimension(widthInput, "最大宽度");
+    if (!width.value) {
+      return { valid: false, message: width.message };
+    }
+
+    if (mode === "width") {
+      return {
+        valid: true,
+        maxWidth: width.value,
+        message: `将按最大宽度 ${width.value} 像素等比缩小，不会放大较小图片。`
+      };
+    }
+
+    const height = parseResizeDimension(heightInput, "最大高度");
+    if (!height.value) {
+      return { valid: false, message: height.message };
+    }
+    if (width.value * height.value > maxResizePixels) {
+      return {
+        valid: false,
+        message: `宽高范围不能超过 ${maxResizePixels.toLocaleString("zh-CN")} 像素的安全上限。`
+      };
+    }
+
+    return {
+      valid: true,
+      maxWidth: width.value,
+      maxHeight: height.value,
+      message: `将适应 ${width.value} × ${height.value} 像素范围，保持宽高比且不放大。`
+    };
+  }
+
+  const height = parseResizeDimension(heightInput, "最大高度");
+  if (!height.value) {
+    return { valid: false, message: height.message };
+  }
+  return {
+    valid: true,
+    maxHeight: height.value,
+    message: `将按最大高度 ${height.value} 像素等比缩小，不会放大较小图片。`
+  };
+}
+
 function App() {
   const [selfCheck, setSelfCheck] = useState<EngineSelfCheck>(fallbackSelfCheck);
   const [tasks, setTasks] = useState<LocalTask[]>([]);
@@ -235,6 +337,9 @@ function App() {
   const [extractPageRange, setExtractPageRange] = useState("");
   const [imageTargetFormat, setImageTargetFormat] =
     useState<EnabledImageFormat>("webp");
+  const [resizeMode, setResizeMode] = useState<ResizeMode>("fit");
+  const [resizeWidth, setResizeWidth] = useState("1920");
+  const [resizeHeight, setResizeHeight] = useState("1080");
   const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(
     () => new Set()
   );
@@ -305,7 +410,7 @@ function App() {
   const imageEngineAvailable = imageEngine?.status === "available";
   const toolCategories = [
     { label: "PDF 工具", enabled: qpdfAvailable, note: qpdfAvailable ? "可用" : "不可用" },
-    { label: "图片转换", enabled: imageEngineAvailable, note: imageEngineAvailable ? "可用" : "不可用" },
+    { label: "图片工具", enabled: imageEngineAvailable, note: imageEngineAvailable ? "可用" : "不可用" },
     { label: "批量队列", enabled: true, note: "本地" },
     { label: "文档转 PDF", enabled: false, note: "稍后" },
     { label: "图片压缩", enabled: false, note: "稍后" },
@@ -398,6 +503,19 @@ function App() {
     selectedCancelledImageTasks.length === 0 &&
     selectedConvertingImageTasks.length === 0 &&
     selectedSameFormatImageTasks.length === 0;
+  const resizeInputValidation = validateResizeInputs(
+    resizeMode,
+    resizeWidth,
+    resizeHeight
+  );
+  const canResizeSelectedImages =
+    imageEngineAvailable &&
+    resizeInputValidation.valid &&
+    selectedTasks.length > 0 &&
+    selectedUnsupportedImageTasks.length === 0 &&
+    selectedImageTasksWithoutPath.length === 0 &&
+    selectedCancelledImageTasks.length === 0 &&
+    selectedConvertingImageTasks.length === 0;
 
   async function planBackendOutput(task: LocalTask, targetExtension = "pdf") {
     if (task.sourceKind !== "native-path" || !task.sourcePath) {
@@ -538,6 +656,24 @@ function App() {
     ].join("\n");
   }
 
+  function formatImageResizeLog(result: ImageResizeResult) {
+    return [
+      `引擎消息: ${result.message}`,
+      `源文件: ${result.sourcePath || "不可用"}`,
+      `输出: ${result.outputPath || "未写入"}`,
+      `格式: ${result.sourceFormat || "未知"}`,
+      `模式: ${result.mode || "未知"}`,
+      `源尺寸: ${result.sourceWidth > 0 && result.sourceHeight > 0 ? `${result.sourceWidth} × ${result.sourceHeight}` : "未验证"}`,
+      `输出尺寸: ${result.outputWidth > 0 && result.outputHeight > 0 ? `${result.outputWidth} × ${result.outputHeight}` : "未验证"}`,
+      `实际缩小: ${result.resized ? "是" : "否（未放大）"}`,
+      `输出大小: ${result.outputBytes} 字节`,
+      `退出码: ${result.exitCode ?? "无"}`,
+      `是否超时: ${result.timedOut ? "是" : "否"}`,
+      result.stdout ? `stdout:\n${result.stdout}` : "stdout: <空>",
+      result.stderr ? `stderr:\n${result.stderr}` : "stderr: <空>"
+    ].join("\n");
+  }
+
   function formatEngineMessage(engine: EngineStatus) {
     if (engine.status === "not-installed") {
       return "尚未内置。";
@@ -548,7 +684,7 @@ function App() {
     }
 
     if (engine.name === "image-engine" && engine.status === "available") {
-      return "image-engine 可用，JPG、PNG、WebP 本地转换已通过自检。";
+      return "image-engine 可用，JPG、PNG、WebP 本地转换与改尺寸已通过自检。";
     }
 
     if (engine.status === "error") {
@@ -675,6 +811,42 @@ function App() {
     }
 
     return `已选择 ${selectedRealLocalImageTasks.length} 张本地图片，将转换为 ${imageTargetFormat.toUpperCase()}。`;
+  }
+
+  function imageResizeGuidance() {
+    if (!imageEngineAvailable) {
+      return "内置 image-engine 不可用，图片改尺寸保持禁用。";
+    }
+
+    if (selectedTasks.length === 0) {
+      return "请在任务队列中选择 JPG、JPEG、PNG 或 WebP 图片。";
+    }
+
+    if (selectedHeicImageTasks.length > 0) {
+      return `所选任务中有 ${selectedHeicImageTasks.length} 个 HEIC 文件。当前不支持 HEIC 解码、方向处理或改尺寸。`;
+    }
+
+    if (selectedUnsupportedImageTasks.length > 0) {
+      return "所选任务中含有不支持的格式。图片改尺寸仅启用 JPG/JPEG、PNG 和 WebP。";
+    }
+
+    if (selectedImageTasksWithoutPath.length > 0) {
+      return "部分图片只有预览元数据。真实改尺寸需要通过原生“选择文件”或桌面拖放重新导入。";
+    }
+
+    if (selectedCancelledImageTasks.length > 0) {
+      return "已取消的图片任务不能改尺寸，请先重试或移除。";
+    }
+
+    if (selectedConvertingImageTasks.length > 0) {
+      return "所选图片中已有任务正在处理，请等待完成。";
+    }
+
+    if (!resizeInputValidation.valid) {
+      return resizeInputValidation.message;
+    }
+
+    return `已选择 ${selectedRealLocalImageTasks.length} 张本地图片。${resizeInputValidation.message}`;
   }
 
   function addPreviewFiles(fileList: FileList | File[]) {
@@ -1591,6 +1763,148 @@ function App() {
     }
   }
 
+  async function resizeSelectedImages() {
+    if (!canResizeSelectedImages) {
+      setFolderMessage(imageResizeGuidance());
+      return;
+    }
+
+    const resizeTasks = selectedRealLocalImageTasks;
+    const mode = resizeMode;
+    const dimensions = validateResizeInputs(mode, resizeWidth, resizeHeight);
+    if (!dimensions.valid) {
+      setFolderMessage(dimensions.message);
+      return;
+    }
+
+    let successCount = 0;
+    let failureCount = 0;
+    let cancelledCount = 0;
+    let unchangedCount = 0;
+    const outputSummaries: string[] = [];
+
+    for (const task of resizeTasks) {
+      if (cancelledTaskIdsRef.current.has(task.taskId)) {
+        cancelledCount += 1;
+        continue;
+      }
+
+      if (!task.sourcePath) {
+        failureCount += 1;
+        continue;
+      }
+
+      await planBackendOutput(task, task.extension);
+      const backendTaskId = createBackendTaskId("image-resize", task.taskId);
+      cancelledTaskIdsRef.current.delete(task.taskId);
+      setTasks((currentTasks) =>
+        currentTasks.map((currentTask) =>
+          currentTask.taskId === task.taskId
+            ? {
+                ...currentTask,
+                backendTaskId,
+                status: "converting",
+                errorLog: ""
+              }
+            : currentTask
+        )
+      );
+
+      try {
+        const response = await invoke<BackendTaskResponse<ImageResizeResult>>(
+          "image_resize_file",
+          {
+            taskId: backendTaskId,
+            request: {
+              source: task.sourcePath,
+              mode,
+              maxWidth: dimensions.maxWidth ?? null,
+              maxHeight: dimensions.maxHeight ?? null
+            }
+          }
+        );
+        const result = response.result;
+        const resultStatus = backendResponseStatus(response);
+        const log = formatImageResizeLog(result);
+        if (resultStatus === "cancelled") {
+          cancelledCount += 1;
+        } else if (result.success) {
+          successCount += 1;
+          if (!result.resized) {
+            unchangedCount += 1;
+          }
+          outputSummaries.push(
+            `${result.outputPath} (${result.outputWidth} × ${result.outputHeight})`
+          );
+        } else {
+          failureCount += 1;
+        }
+
+        setTasks((currentTasks) =>
+          currentTasks.map((currentTask) => {
+            if (currentTask.taskId !== task.taskId) {
+              return currentTask;
+            }
+
+            const status =
+              currentTask.status === "cancelled" ? "cancelled" : resultStatus;
+            return {
+              ...currentTask,
+              backendTaskId: undefined,
+              status,
+              outputPreview:
+                status === "completed" && result.outputPath
+                  ? result.outputPath
+                  : currentTask.outputPreview,
+              errorLog: status === "failed" ? log : ""
+            };
+          })
+        );
+      } catch (error) {
+        const wasCancelled = cancelledTaskIdsRef.current.has(task.taskId);
+        if (wasCancelled) {
+          cancelledCount += 1;
+        } else {
+          failureCount += 1;
+        }
+        const message =
+          typeof error === "string"
+            ? error
+            : error instanceof Error
+              ? error.message
+              : "图片改尺寸失败。";
+        setTasks((currentTasks) =>
+          currentTasks.map((currentTask) =>
+            currentTask.taskId === task.taskId
+              ? {
+                  ...currentTask,
+                  backendTaskId: undefined,
+                  status:
+                    currentTask.status === "cancelled" || wasCancelled
+                      ? "cancelled"
+                      : "failed",
+                  errorLog:
+                    currentTask.status === "cancelled" || wasCancelled
+                      ? ""
+                      : message
+                }
+              : currentTask
+          )
+        );
+      }
+    }
+
+    if (failureCount === 0 && cancelledCount === 0) {
+      setFolderMessage(
+        `已在本机完成 ${successCount} 张图片改尺寸。${unchangedCount > 0 ? `其中 ${unchangedCount} 张未放大并保持原尺寸。` : ""}输出：${outputSummaries.join(" | ")}`
+      );
+    } else {
+      setFolderMessage(
+        `图片改尺寸结束：成功 ${successCount}，失败 ${failureCount}，已取消 ${cancelledCount}。${failureCount > 0 ? "请查看失败任务的错误日志。" : "未保留已取消任务的未完成输出。"}`
+      );
+    }
+  }
+
   return (
     <main className="app-shell">
       <header className="top-bar">
@@ -1608,7 +1922,7 @@ function App() {
               : qpdfAvailable
                 ? "PDF qpdf 工具已启用"
                 : imageEngineAvailable
-                  ? "图片转换已启用"
+                  ? "图片转换与改尺寸已启用"
                   : "转换未启用"}
           </span>
         </div>
@@ -1638,7 +1952,7 @@ function App() {
           </nav>
           <div className="sidebar-note">
             <strong>本地工具预览</strong>
-            <span>PDF 工具与 JPG、PNG、WebP 图片转换已启用。Office 等其他能力仍未启用。</span>
+            <span>PDF 工具与 JPG、PNG、WebP 图片转换和改尺寸已启用。Office 等其他能力仍未启用。</span>
           </div>
         </aside>
 
@@ -1829,15 +2143,15 @@ function App() {
             </div>
           </section>
 
-          <section className="image-tools-panel" aria-label="Preview 0.2 图片转换">
+          <section className="image-tools-panel" aria-label="Preview 0.3 图片工具">
             <div className="pdf-tools-header">
               <div>
-                <p className="section-kicker">Preview 0.2 · 本地功能预览</p>
-                <h2>图片格式转换</h2>
+                <p className="section-kicker">Preview 0.3 · 本地功能预览</p>
+                <h2>图片工具</h2>
                 <p>
                   {imageEngineAvailable
-                    ? "JPG、PNG、WebP 已启用，转换仅在本机执行。"
-                    : "图片引擎不可用，转换操作保持禁用。"}
+                    ? "JPG、PNG、WebP 格式转换与等比改尺寸已启用，仅在本机执行。"
+                    : "图片引擎不可用，图片操作保持禁用。"}
                 </p>
               </div>
               <div className="selection-tools">
@@ -1906,17 +2220,80 @@ function App() {
                 </button>
               </article>
 
-              <article className="pdf-tool-card image-tool-card">
-                <h3>图片压缩</h3>
-                <p>高清、平衡、小体积等本地压缩预设仍在规划中。</p>
-                <button type="button" disabled>
-                  稍后启用
+              <article className="pdf-tool-card image-tool-card image-resize-card">
+                <h3>图片改尺寸 <span className="preview-label">Preview</span></h3>
+                <p>保持原格式和宽高比，结果写入 converted 文件夹，不放大较小图片。</p>
+                <fieldset className="resize-mode-fieldset">
+                  <legend>调整方式</legend>
+                  <div className="resize-mode-control">
+                    {([
+                      ["fit", "适应范围"],
+                      ["width", "仅宽度"],
+                      ["height", "仅高度"]
+                    ] as const).map(([value, label]) => (
+                      <label
+                        className={resizeMode === value ? "is-selected" : ""}
+                        key={value}
+                      >
+                        <input
+                          type="radio"
+                          name="resize-mode"
+                          value={value}
+                          checked={resizeMode === value}
+                          onChange={() => setResizeMode(value)}
+                        />
+                        <span>{label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+                <div className="resize-dimension-grid">
+                  <label>
+                    <span>最大宽度</span>
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      min="1"
+                      max={maxResizeDimension}
+                      step="1"
+                      value={resizeWidth}
+                      disabled={resizeMode === "height"}
+                      onChange={(event) => setResizeWidth(event.currentTarget.value)}
+                    />
+                  </label>
+                  <label>
+                    <span>最大高度</span>
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      min="1"
+                      max={maxResizeDimension}
+                      step="1"
+                      value={resizeHeight}
+                      disabled={resizeMode === "width"}
+                      onChange={(event) => setResizeHeight(event.currentTarget.value)}
+                    />
+                  </label>
+                </div>
+                <div className="resize-invariants" aria-label="固定调整规则">
+                  <label><input type="checkbox" checked disabled readOnly />保持宽高比</label>
+                  <label><input type="checkbox" checked disabled readOnly />不放大小图</label>
+                </div>
+                <p className={resizeInputValidation.valid ? "resize-guidance" : "resize-guidance is-error"}>
+                  {imageResizeGuidance()}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void resizeSelectedImages()}
+                  disabled={!canResizeSelectedImages}
+                >
+                  改尺寸并保存
                 </button>
               </article>
 
               <article className="pdf-tool-card image-tool-card">
-                <h3>图片改尺寸</h3>
-                <p>按宽度、高度或等比规则批量调整尺寸仍在规划中。</p>
+                <h3>图片压缩</h3>
+                <p>高清、平衡、小体积等本地压缩预设仍在规划中。</p>
                 <button type="button" disabled>
                   稍后启用
                 </button>
@@ -2054,7 +2431,7 @@ function App() {
               {startupError
                 ? `启动初始化报告问题：${startupError}`
                 : qpdfAvailable || imageEngineAvailable
-                  ? "PDF 工具与 JPG、PNG、WebP 图片转换会按可用引擎状态在本机启用。"
+                  ? "PDF 工具与 JPG、PNG、WebP 图片转换和改尺寸会按可用引擎状态在本机启用。"
                   : "转换引擎不可用。"}
             </p>
             <dl className="engine-list">
@@ -2081,7 +2458,7 @@ function App() {
               <li>不上传。</li>
               <li>不会修改原文件。</li>
               <li>PDF 合并、拆分、页面提取和旋转仅使用内置本地 qpdf。</li>
-              <li>JPG、PNG、WebP 转换仅使用内置本地 image-engine。</li>
+              <li>JPG、PNG、WebP 转换和改尺寸仅使用内置本地 image-engine。</li>
               <li>Office、其他图片格式与其他图片操作仍未启用。</li>
             </ul>
           </section>

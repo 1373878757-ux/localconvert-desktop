@@ -13,6 +13,8 @@ const IMAGE_ENGINE_MESSAGE: &str = "Image engine is not bundled yet.";
 const INPUT_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp", "avif", "tiff", "tif", "heic"];
 const OUTPUT_FORMATS: &[&str] = &["jpg", "jpeg", "png", "webp", "avif", "tiff"];
 const COMPRESSION_PRESETS: &[&str] = &["high-quality", "balanced", "small-size"];
+const MAX_RESIZE_DIMENSION: u32 = 16_384;
+const MAX_RESIZE_PIXELS: u64 = 64_000_000;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -244,6 +246,22 @@ fn validate_resize_dimensions(width: Option<u32>, height: Option<u32>) -> Result
 
     if matches!(width, Some(0)) || matches!(height, Some(0)) {
         return Err("Image resize dimensions must be greater than zero.".to_string());
+    }
+
+    if width.is_some_and(|dimension| dimension > MAX_RESIZE_DIMENSION)
+        || height.is_some_and(|dimension| dimension > MAX_RESIZE_DIMENSION)
+    {
+        return Err(format!(
+            "Image resize dimensions must not exceed {MAX_RESIZE_DIMENSION} pixels per edge."
+        ));
+    }
+
+    if let (Some(width), Some(height)) = (width, height) {
+        if u64::from(width) * u64::from(height) > MAX_RESIZE_PIXELS {
+            return Err(format!(
+                "Image resize bounds exceed the {MAX_RESIZE_PIXELS}-pixel safety limit."
+            ));
+        }
     }
 
     Ok(())
@@ -511,6 +529,22 @@ mod tests {
             source: "sample.png".to_string(),
             width: Some(0),
             height: None,
+            output_format: None,
+            output_strategy: None,
+        })
+        .is_err());
+        assert!(plan_image_resize(ImageResizeRequest {
+            source: "sample.png".to_string(),
+            width: Some(16_385),
+            height: None,
+            output_format: None,
+            output_strategy: None,
+        })
+        .is_err());
+        assert!(plan_image_resize(ImageResizeRequest {
+            source: "sample.png".to_string(),
+            width: Some(10_000),
+            height: Some(10_000),
             output_format: None,
             output_strategy: None,
         })
