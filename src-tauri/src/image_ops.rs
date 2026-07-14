@@ -88,7 +88,12 @@ pub fn plan_image_compress(request: ImageCompressRequest) -> Result<ImageOperati
     validate_compression_preset(&request.preset)?;
     let target_format =
         target_format_or_source_default(&request.source, request.output_format.as_deref())?;
-    plan_image_operation_with_output("compress", &request.source, &target_format, true)
+    plan_image_operation_with_suffix(
+        "compress",
+        &request.source,
+        &target_format,
+        Some("compressed"),
+    )
 }
 
 #[tauri::command]
@@ -107,7 +112,12 @@ pub fn plan_image_remove_metadata(
     validate_output_strategy(&request.output_strategy)?;
     let target_format =
         target_format_or_source_default(&request.source, request.output_format.as_deref())?;
-    plan_image_operation("remove-metadata", &request.source, &target_format)
+    plan_image_operation_with_suffix(
+        "remove-metadata",
+        &request.source,
+        &target_format,
+        Some("cleaned"),
+    )
 }
 
 fn plan_image_operation(
@@ -115,20 +125,16 @@ fn plan_image_operation(
     source: &str,
     target_format: &str,
 ) -> Result<ImageOperationPlan, String> {
-    plan_image_operation_with_output(operation, source, target_format, false)
+    plan_image_operation_with_suffix(operation, source, target_format, None)
 }
 
-fn plan_image_operation_with_output(
+fn plan_image_operation_with_suffix(
     operation: &'static str,
     source: &str,
     target_format: &str,
-    compressed_name: bool,
+    stem_suffix: Option<&str>,
 ) -> Result<ImageOperationPlan, String> {
-    let output = if compressed_name {
-        plan_compressed_image_output(source, target_format)?
-    } else {
-        plan_image_output(source, target_format)?
-    };
+    let output = plan_image_output_with_suffix(source, target_format, stem_suffix)?;
 
     Ok(ImageOperationPlan {
         operation,
@@ -157,6 +163,13 @@ pub(crate) fn plan_compressed_image_output(
     target_format: &str,
 ) -> Result<PlannedImageOutput, String> {
     plan_image_output_with_suffix(source, target_format, Some("compressed"))
+}
+
+pub(crate) fn plan_cleaned_image_output(
+    source: &str,
+    target_format: &str,
+) -> Result<PlannedImageOutput, String> {
+    plan_image_output_with_suffix(source, target_format, Some("cleaned"))
 }
 
 fn plan_image_output_with_suffix(
@@ -590,5 +603,6 @@ mod tests {
         })
         .expect("metadata removal should be planned");
         assert_eq!(metadata_plan.operation, "remove-metadata");
+        assert_eq!(metadata_plan.planned_output_filename, "sample cleaned.webp");
     }
 }

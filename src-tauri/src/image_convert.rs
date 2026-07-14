@@ -114,6 +114,40 @@ pub struct ImageCompressResult {
     message: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageCleanMetadataExecutionRequest {
+    source: String,
+}
+
+#[derive(Serialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageCleanMetadataResult {
+    success: bool,
+    operation: &'static str,
+    source_path: String,
+    planned_output_path: String,
+    output_path: String,
+    source_format: String,
+    changed: bool,
+    published: bool,
+    metadata_items_removed: u32,
+    removed_kinds: Vec<String>,
+    pixel_data_preserved: bool,
+    reencoded: bool,
+    source_bytes: u64,
+    output_bytes: u64,
+    source_width: u32,
+    source_height: u32,
+    output_width: u32,
+    output_height: u32,
+    stdout: String,
+    stderr: String,
+    exit_code: Option<i32>,
+    timed_out: bool,
+    message: String,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ResizeMode {
     Fit,
@@ -149,6 +183,24 @@ struct ImageCompressionSidecarReport {
     output_bytes: u64,
 }
 
+#[derive(Deserialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct ImageMetadataCleanupSidecarReport {
+    operation: String,
+    format: String,
+    changed: bool,
+    metadata_items_removed: u32,
+    removed_kinds: Vec<String>,
+    source_width: u32,
+    source_height: u32,
+    output_width: u32,
+    output_height: u32,
+    source_bytes: u64,
+    output_bytes: u64,
+    pixel_data_preserved: bool,
+    reencoded: bool,
+}
+
 struct ResizeFailureContext<'a> {
     source_path: &'a Path,
     output_path: &'a Path,
@@ -163,6 +215,13 @@ struct CompressionFailureContext<'a> {
     source_format: &'a str,
     quality: Option<u8>,
     lossless: bool,
+    source_bytes: u64,
+}
+
+struct MetadataCleanupFailureContext<'a> {
+    source_path: &'a Path,
+    planned_output_path: &'a Path,
+    source_format: &'a str,
     source_bytes: u64,
 }
 
@@ -300,6 +359,53 @@ pub(crate) fn image_compress_task(
             timed_out: false,
             message,
         });
+    if control.is_cancelled() {
+        result.mark_cancelled();
+    }
+    result
+}
+
+#[cfg(test)]
+pub fn image_clean_metadata_file(
+    request: ImageCleanMetadataExecutionRequest,
+) -> ImageCleanMetadataResult {
+    image_clean_metadata_task(request, TaskControl::detached("image-clean-metadata"))
+}
+
+pub(crate) fn image_clean_metadata_task(
+    request: ImageCleanMetadataExecutionRequest,
+    control: TaskControl,
+) -> ImageCleanMetadataResult {
+    let source_path = request.source.trim().to_string();
+    let source_format = source_format_from_path(Path::new(&source_path)).unwrap_or_default();
+
+    let mut result = execute_image_clean_metadata(&request, &control).unwrap_or_else(|message| {
+        ImageCleanMetadataResult {
+            success: false,
+            operation: "clean-metadata",
+            source_path,
+            planned_output_path: String::new(),
+            output_path: String::new(),
+            source_format,
+            changed: false,
+            published: false,
+            metadata_items_removed: 0,
+            removed_kinds: Vec::new(),
+            pixel_data_preserved: false,
+            reencoded: false,
+            source_bytes: 0,
+            output_bytes: 0,
+            source_width: 0,
+            source_height: 0,
+            output_width: 0,
+            output_height: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: None,
+            timed_out: false,
+            message,
+        }
+    });
     if control.is_cancelled() {
         result.mark_cancelled();
     }
@@ -815,6 +921,230 @@ fn execute_image_compress(
     })
 }
 
+fn execute_image_clean_metadata(
+    request: &ImageCleanMetadataExecutionRequest,
+    control: &TaskControl,
+) -> Result<ImageCleanMetadataResult, String> {
+    if control.is_cancelled() {
+        return Err("Image metadata cleanup task was cancelled before execution.".to_string());
+    }
+
+    let source_path = validate_source_image(&request.source)?;
+    let source_format = source_format_from_path(&source_path)?;
+    let output_extension = resize_output_extension(&source_path)?;
+    let source_bytes = fs::metadata(&source_path)
+        .map_err(|error| format!("Unable to inspect source image size: {error}"))?
+        .len();
+    let planned_output =
+        image_ops::plan_cleaned_image_output(&path_to_string(&source_path), &output_extension)?;
+    let converted_folder = PathBuf::from(&planned_output.planned_converted_folder_path);
+    let output_path = PathBuf::from(&planned_output.planned_output_path);
+    validate_planned_output_location(&source_path, &converted_folder, &output_path)?;
+
+    let image_engine_path =
+        image_engine::resolve_image_engine_sidecar_path(image_engine::current_platform_key())?;
+    let workspace = TaskOutputWorkspace::create(&converted_folder, control.task_id())?;
+    let temp_output = workspace.temp_file(&format!("cleaned-output.{output_extension}"))?;
+    let plan = build_image_clean_metadata_arguments(&source_path, &temp_output)?;
+    let execution = run_image_engine_command(
+        &image_engine_path,
+        &plan.arguments,
+        Duration::from_secs(IMAGE_CONVERT_TIMEOUT_SECONDS),
+        control,
+    )?;
+    let failure_context = MetadataCleanupFailureContext {
+        source_path: &source_path,
+        planned_output_path: &output_path,
+        source_format: &source_format,
+        source_bytes,
+    };
+
+    if execution.cancelled || control.is_cancelled() {
+        return Ok(metadata_cleanup_failure_result(
+            &failure_context,
+            Some(&execution),
+            false,
+            "Image metadata cleanup task was cancelled locally.",
+        ));
+    }
+    if execution.timed_out {
+        return Ok(metadata_cleanup_failure_result(
+            &failure_context,
+            Some(&execution),
+            true,
+            &format!(
+                "image-engine metadata cleanup timed out after {IMAGE_CONVERT_TIMEOUT_SECONDS} seconds."
+            ),
+        ));
+    }
+    if execution.exit_code != Some(0) {
+        return Ok(metadata_cleanup_failure_result(
+            &failure_context,
+            Some(&execution),
+            false,
+            "image-engine metadata cleanup failed.",
+        ));
+    }
+
+    let report = match parse_metadata_cleanup_sidecar_report(
+        &execution.stdout,
+        &source_format,
+        source_bytes,
+    ) {
+        Ok(report) => report,
+        Err(message) => {
+            return Ok(metadata_cleanup_failure_result(
+                &failure_context,
+                Some(&execution),
+                false,
+                &message,
+            ));
+        }
+    };
+
+    if !report.changed {
+        if temp_output.exists() {
+            return Ok(metadata_cleanup_failure_result(
+                &failure_context,
+                Some(&execution),
+                false,
+                "image-engine reported no metadata change but created an output file.",
+            ));
+        }
+        return Ok(ImageCleanMetadataResult {
+            success: true,
+            operation: "clean-metadata",
+            source_path: path_to_string(&source_path),
+            planned_output_path: path_to_string(&output_path),
+            output_path: String::new(),
+            source_format,
+            changed: false,
+            published: false,
+            metadata_items_removed: 0,
+            removed_kinds: Vec::new(),
+            pixel_data_preserved: true,
+            reencoded: false,
+            source_bytes,
+            output_bytes: 0,
+            source_width: report.source_width,
+            source_height: report.source_height,
+            output_width: report.output_width,
+            output_height: report.output_height,
+            stdout: execution.stdout,
+            stderr: execution.stderr,
+            exit_code: execution.exit_code,
+            timed_out: false,
+            message: "未发现可清理的元数据，未生成新文件".to_string(),
+        });
+    }
+
+    let (output_bytes, output_width, output_height) = match validate_output_image(&temp_output) {
+        Ok(output) => output,
+        Err(message) => {
+            return Ok(metadata_cleanup_failure_result(
+                &failure_context,
+                Some(&execution),
+                false,
+                &message,
+            ));
+        }
+    };
+    if report.output_bytes != output_bytes
+        || (report.output_width, report.output_height) != (output_width, output_height)
+    {
+        return Ok(metadata_cleanup_failure_result(
+            &failure_context,
+            Some(&execution),
+            false,
+            "image-engine metadata cleanup report does not match the validated output.",
+        ));
+    }
+
+    let finalized =
+        match control.commit_outputs(|| workspace.finalize_file(&temp_output, &output_path)) {
+            Ok(finalized) => finalized,
+            Err(TaskCommitError::Cancelled) => {
+                return Ok(metadata_cleanup_failure_result(
+                    &failure_context,
+                    Some(&execution),
+                    false,
+                    "Image metadata cleanup task was cancelled before output finalization.",
+                ));
+            }
+            Err(TaskCommitError::Finalize(message)) => {
+                return Ok(metadata_cleanup_failure_result(
+                    &failure_context,
+                    Some(&execution),
+                    false,
+                    &message,
+                ));
+            }
+        };
+
+    Ok(ImageCleanMetadataResult {
+        success: true,
+        operation: "clean-metadata",
+        source_path: path_to_string(&source_path),
+        planned_output_path: path_to_string(&output_path),
+        output_path: path_to_string(&finalized.path),
+        source_format,
+        changed: true,
+        published: true,
+        metadata_items_removed: report.metadata_items_removed,
+        removed_kinds: report.removed_kinds,
+        pixel_data_preserved: report.pixel_data_preserved,
+        reencoded: report.reencoded,
+        source_bytes,
+        output_bytes: finalized.bytes,
+        source_width: report.source_width,
+        source_height: report.source_height,
+        output_width,
+        output_height,
+        stdout: execution.stdout,
+        stderr: execution.stderr,
+        exit_code: execution.exit_code,
+        timed_out: false,
+        message: "图片元数据已在本机清理完成。".to_string(),
+    })
+}
+
+fn metadata_cleanup_failure_result(
+    context: &MetadataCleanupFailureContext<'_>,
+    execution: Option<&ImageEngineExecutionResult>,
+    timed_out: bool,
+    message: &str,
+) -> ImageCleanMetadataResult {
+    ImageCleanMetadataResult {
+        success: false,
+        operation: "clean-metadata",
+        source_path: path_to_string(context.source_path),
+        planned_output_path: path_to_string(context.planned_output_path),
+        output_path: String::new(),
+        source_format: context.source_format.to_string(),
+        changed: false,
+        published: false,
+        metadata_items_removed: 0,
+        removed_kinds: Vec::new(),
+        pixel_data_preserved: false,
+        reencoded: false,
+        source_bytes: context.source_bytes,
+        output_bytes: 0,
+        source_width: 0,
+        source_height: 0,
+        output_width: 0,
+        output_height: 0,
+        stdout: execution
+            .map(|execution| execution.stdout.clone())
+            .unwrap_or_default(),
+        stderr: execution
+            .map(|execution| execution.stderr.clone())
+            .unwrap_or_default(),
+        exit_code: execution.and_then(|execution| execution.exit_code),
+        timed_out,
+        message: message.to_string(),
+    }
+}
+
 fn compression_failure_result(
     context: &CompressionFailureContext<'_>,
     execution: Option<&ImageEngineExecutionResult>,
@@ -930,6 +1260,29 @@ impl ImageCompressResult {
         self.width = 0;
         self.height = 0;
         self.message = "Image compression task was cancelled locally.".to_string();
+    }
+}
+
+impl ImageCleanMetadataResult {
+    pub(crate) fn succeeded(&self) -> bool {
+        self.success
+    }
+
+    pub(crate) fn mark_cancelled(&mut self) {
+        self.success = false;
+        self.output_path.clear();
+        self.changed = false;
+        self.published = false;
+        self.metadata_items_removed = 0;
+        self.removed_kinds.clear();
+        self.pixel_data_preserved = false;
+        self.reencoded = false;
+        self.output_bytes = 0;
+        self.source_width = 0;
+        self.source_height = 0;
+        self.output_width = 0;
+        self.output_height = 0;
+        self.message = "Image metadata cleanup task was cancelled locally.".to_string();
     }
 }
 
@@ -1228,6 +1581,33 @@ fn build_image_compress_arguments(
     })
 }
 
+fn build_image_clean_metadata_arguments(
+    source_path: &Path,
+    output_path: &Path,
+) -> Result<ImageEngineCommandPlan, String> {
+    let source_extension = resize_output_extension(source_path)?;
+    if output_path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_none_or(|extension| !extension.eq_ignore_ascii_case(&source_extension))
+    {
+        return Err(
+            "Metadata cleanup output extension must match the source image extension.".to_string(),
+        );
+    }
+
+    Ok(ImageEngineCommandPlan {
+        executable: "image-engine",
+        arguments: vec![
+            OsString::from("clean-metadata"),
+            OsString::from("--input"),
+            source_path.as_os_str().to_os_string(),
+            OsString::from("--output"),
+            output_path.as_os_str().to_os_string(),
+        ],
+    })
+}
+
 fn parse_resize_sidecar_report(
     stdout: &str,
     expected_mode: ResizeMode,
@@ -1299,6 +1679,61 @@ fn parse_compression_sidecar_report(
             != (report.output_width, report.output_height)
     {
         return Err("image-engine compression report has invalid dimensions.".to_string());
+    }
+
+    Ok(report)
+}
+
+fn parse_metadata_cleanup_sidecar_report(
+    stdout: &str,
+    expected_format: &str,
+    expected_source_bytes: u64,
+) -> Result<ImageMetadataCleanupSidecarReport, String> {
+    let report: ImageMetadataCleanupSidecarReport =
+        serde_json::from_str(stdout.trim()).map_err(|error| {
+            format!("image-engine metadata cleanup returned an invalid report: {error}")
+        })?;
+    if report.operation != "clean-metadata" || report.format != expected_format {
+        return Err(
+            "image-engine metadata cleanup report does not match the requested operation."
+                .to_string(),
+        );
+    }
+    if report.source_bytes != expected_source_bytes
+        || report.source_width == 0
+        || report.source_height == 0
+        || report.output_width == 0
+        || report.output_height == 0
+    {
+        return Err("image-engine metadata cleanup report has invalid source details.".to_string());
+    }
+    if report.changed {
+        if report.metadata_items_removed == 0
+            || report.removed_kinds.is_empty()
+            || report.output_bytes == 0
+        {
+            return Err(
+                "image-engine metadata cleanup report has inconsistent removal details."
+                    .to_string(),
+            );
+        }
+        if report.reencoded == report.pixel_data_preserved {
+            return Err(
+                "image-engine metadata cleanup report has inconsistent pixel preservation details."
+                    .to_string(),
+            );
+        }
+    } else if report.metadata_items_removed != 0
+        || !report.removed_kinds.is_empty()
+        || report.output_bytes != 0
+        || !report.pixel_data_preserved
+        || report.reencoded
+        || (report.source_width, report.source_height)
+            != (report.output_width, report.output_height)
+    {
+        return Err(
+            "image-engine metadata cleanup report has inconsistent no-change details.".to_string(),
+        );
     }
 
     Ok(report)
@@ -1490,6 +1925,22 @@ mod tests {
             .write_with_encoder(JpegEncoder::new_with_quality(&mut encoded, 100))
             .expect("high-quality test JPEG should encode");
         fs::write(path, &encoded).expect("test JPEG should be written");
+        encoded
+    }
+
+    fn create_jpeg_with_comment_metadata(path: &Path) -> Vec<u8> {
+        let base_path = path.with_extension("base.jpg");
+        let base = create_high_quality_jpeg(&base_path);
+        let comment = b"private camera owner and location";
+        let length = u16::try_from(comment.len() + 2).expect("test comment should fit");
+        let mut encoded = Vec::with_capacity(base.len() + comment.len() + 4);
+        encoded.extend_from_slice(&base[..2]);
+        encoded.extend_from_slice(&[0xff, 0xfe]);
+        encoded.extend_from_slice(&length.to_be_bytes());
+        encoded.extend_from_slice(comment);
+        encoded.extend_from_slice(&base[2..]);
+        fs::write(path, &encoded).expect("metadata JPEG should be written");
+        let _ = fs::remove_file(base_path);
         encoded
     }
 
@@ -1850,6 +2301,115 @@ mod tests {
     }
 
     #[test]
+    fn plans_metadata_cleanup_arguments_as_an_array_for_chinese_paths() {
+        let plan = build_image_clean_metadata_arguments(
+            Path::new("/tmp/客户 文件/手机 照片.jpeg"),
+            Path::new("/tmp/客户 文件/converted/手机 照片 cleaned.jpeg"),
+        )
+        .expect("metadata cleanup arguments should be planned");
+
+        assert_eq!(plan.executable, "image-engine");
+        assert_eq!(
+            plan.arguments,
+            vec![
+                OsString::from("clean-metadata"),
+                OsString::from("--input"),
+                OsString::from("/tmp/客户 文件/手机 照片.jpeg"),
+                OsString::from("--output"),
+                OsString::from("/tmp/客户 文件/converted/手机 照片 cleaned.jpeg"),
+            ]
+        );
+    }
+
+    #[test]
+    fn validates_metadata_cleanup_sidecar_change_and_no_change_reports() {
+        let changed = parse_metadata_cleanup_sidecar_report(
+            r#"{"operation":"clean-metadata","format":"jpg","changed":true,"metadataItemsRemoved":2,"removedKinds":["EXIF and GPS","XMP"],"sourceWidth":40,"sourceHeight":24,"outputWidth":40,"outputHeight":24,"sourceBytes":900,"outputBytes":700,"pixelDataPreserved":true,"reencoded":false}"#,
+            "jpg",
+            900,
+        )
+        .expect("changed cleanup report should validate");
+        assert!(changed.changed);
+        assert_eq!(changed.metadata_items_removed, 2);
+
+        let unchanged = parse_metadata_cleanup_sidecar_report(
+            r#"{"operation":"clean-metadata","format":"png","changed":false,"metadataItemsRemoved":0,"removedKinds":[],"sourceWidth":12,"sourceHeight":10,"outputWidth":12,"outputHeight":10,"sourceBytes":400,"outputBytes":0,"pixelDataPreserved":true,"reencoded":false}"#,
+            "png",
+            400,
+        )
+        .expect("no-change cleanup report should validate");
+        assert!(!unchanged.changed);
+
+        assert!(parse_metadata_cleanup_sidecar_report(
+            r#"{"operation":"clean-metadata","format":"png","changed":true,"metadataItemsRemoved":0,"removedKinds":[],"sourceWidth":12,"sourceHeight":10,"outputWidth":12,"outputHeight":10,"sourceBytes":400,"outputBytes":300,"pixelDataPreserved":true,"reencoded":false}"#,
+            "png",
+            400,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn cancelled_metadata_cleanup_does_not_start_or_create_output_folder() {
+        let case_dir = temp_case_dir("metadata-cleanup-cancel-before-start");
+        fs::create_dir_all(&case_dir).expect("test directory should be created");
+        let source = case_dir.join("cancel cleanup.jpg");
+        create_jpeg_with_comment_metadata(&source);
+
+        let registry = BackendTaskRegistry::default();
+        let control = registry
+            .register("metadata-cleanup-cancel", "image-clean-metadata")
+            .expect("metadata cleanup task should register");
+        registry
+            .cancel("metadata-cleanup-cancel")
+            .expect("metadata cleanup task should cancel");
+        let result = image_clean_metadata_task(
+            ImageCleanMetadataExecutionRequest {
+                source: path_to_string(&source),
+            },
+            control,
+        );
+
+        assert!(!result.success);
+        assert!(!result.published);
+        assert!(result.message.contains("cancelled locally"));
+        assert_eq!(
+            registry.status("metadata-cleanup-cancel"),
+            Ok(BackendTaskStatus::Cancelled)
+        );
+        assert!(!case_dir.join("converted").exists());
+
+        let _ = fs::remove_dir_all(case_dir);
+    }
+
+    #[test]
+    fn metadata_cleanup_rejects_heic_before_creating_output_folder() {
+        let case_dir = temp_case_dir("metadata-cleanup-heic");
+        fs::create_dir_all(&case_dir).expect("test directory should be created");
+        let source = case_dir.join("phone.heic");
+        fs::write(&source, b"unsupported fixture").expect("HEIC fixture should be written");
+
+        let result = image_clean_metadata_file(ImageCleanMetadataExecutionRequest {
+            source: path_to_string(&source),
+        });
+
+        assert!(!result.success);
+        assert!(result.message.contains("planned but not enabled"));
+        assert!(!case_dir.join("converted").exists());
+
+        let unsupported = case_dir.join("animation.gif");
+        fs::write(&unsupported, b"unsupported fixture")
+            .expect("unsupported fixture should be written");
+        let unsupported_result = image_clean_metadata_file(ImageCleanMetadataExecutionRequest {
+            source: path_to_string(&unsupported),
+        });
+        assert!(!unsupported_result.success);
+        assert!(unsupported_result.message.contains("must use a .jpg"));
+        assert!(!case_dir.join("converted").exists());
+
+        let _ = fs::remove_dir_all(case_dir);
+    }
+
+    #[test]
     fn collision_planning_selects_next_available_name() {
         let case_dir = temp_case_dir("collision");
         let converted_dir = case_dir.join("converted");
@@ -2174,6 +2734,81 @@ mod tests {
         assert_eq!(result.message, "压缩后未变小，未生成新文件");
         assert_eq!(fs::read(&source).unwrap(), source_before);
         assert!(!Path::new(&result.planned_output_path).exists());
+        let task_workspaces = fs::read_dir(case_dir.join("converted"))
+            .expect("converted folder should be readable")
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".localconvert-task-")
+            })
+            .count();
+        assert_eq!(task_workspaces, 0);
+
+        let _ = fs::remove_dir_all(case_dir);
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[test]
+    fn bundled_sidecar_cleans_metadata_with_collision_safe_output() {
+        let case_dir = temp_case_dir("metadata-cleanup-e2e").join("客户 文件 with spaces");
+        let converted_dir = case_dir.join("converted");
+        fs::create_dir_all(&converted_dir).expect("converted directory should be created");
+        let source = case_dir.join("手机 隐私.jpg");
+        let source_before = create_jpeg_with_comment_metadata(&source);
+        let existing_output = converted_dir.join("手机 隐私 cleaned.jpg");
+        fs::write(&existing_output, b"existing-user-output")
+            .expect("existing output should be written");
+
+        let result = image_clean_metadata_file(ImageCleanMetadataExecutionRequest {
+            source: path_to_string(&source),
+        });
+
+        assert!(result.success, "{}\n{}", result.message, result.stderr);
+        assert!(result.changed);
+        assert!(result.published);
+        assert!(result.metadata_items_removed >= 1);
+        assert!(result.pixel_data_preserved);
+        assert!(!result.reencoded);
+        assert_eq!(
+            PathBuf::from(&result.output_path),
+            converted_dir.join("手机 隐私 cleaned (1).jpg")
+        );
+        assert_image_format(Path::new(&result.output_path), ImageFormat::Jpeg);
+        let cleaned = fs::read(&result.output_path).expect("cleaned image should be readable");
+        assert!(!cleaned
+            .windows(b"private camera owner and location".len())
+            .any(|window| window == b"private camera owner and location"));
+        assert_eq!(fs::read(&existing_output).unwrap(), b"existing-user-output");
+        assert_eq!(fs::read(&source).unwrap(), source_before);
+
+        let _ = fs::remove_dir_all(
+            case_dir
+                .parent()
+                .expect("test directory should have a cleanup parent"),
+        );
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[test]
+    fn bundled_sidecar_skips_metadata_free_image_without_temp_leftovers() {
+        let case_dir = temp_case_dir("metadata-cleanup-no-change");
+        fs::create_dir_all(&case_dir).expect("test directory should be created");
+        let source = case_dir.join("plain.png");
+        let source_before = create_test_png(&source);
+
+        let result = image_clean_metadata_file(ImageCleanMetadataExecutionRequest {
+            source: path_to_string(&source),
+        });
+
+        assert!(result.success, "{}\n{}", result.message, result.stderr);
+        assert!(!result.changed);
+        assert!(!result.published);
+        assert!(result.output_path.is_empty());
+        assert_eq!(result.message, "未发现可清理的元数据，未生成新文件");
+        assert!(!Path::new(&result.planned_output_path).exists());
+        assert_eq!(fs::read(&source).unwrap(), source_before);
         let task_workspaces = fs::read_dir(case_dir.join("converted"))
             .expect("converted folder should be readable")
             .filter_map(Result::ok)

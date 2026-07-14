@@ -1,7 +1,7 @@
 LocalConvert Desktop image-engine sidecar notice
 
 Engine: image-engine
-Version: 0.4.0-preview.0
+Version: 0.5.0-preview.0
 Platform: macos-aarch64
 License: First-party LocalConvert Desktop sidecar with third-party Rust codec dependencies
 
@@ -14,16 +14,21 @@ src-tauri/binaries/macos-aarch64/image-engine
 Build notes:
 This image-engine command-line sidecar is first-party Rust code for LocalConvert Desktop.
 It supports --version, --self-check, local conversion between JPG/JPEG, PNG, and WebP,
-aspect-ratio-preserving local resize, and same-format image compression for those formats.
+aspect-ratio-preserving local resize, same-format image compression, and best-effort
+metadata/privacy cleanup for those formats.
 Resize supports fit, width-only, and height-only modes, never upscales, and enforces
 16,384-pixel edge and 64,000,000-pixel limits. Compression supports JPEG and WebP quality
 values from 40 through 95 and lossless-only PNG optimization. JPEG and WebP orientation
 metadata exposed by the decoder is applied before conversion, resize, or compression;
-stale orientation metadata is not copied to the output.
-The conversion, resize, and compression commands read only the requested local source image
+stale orientation metadata is not copied to the output. Metadata cleanup removes common JPEG
+EXIF/GPS, XMP, IPTC/camera/comment segments, PNG EXIF/text/time chunks, and WebP EXIF/XMP
+chunks. Non-oriented images retain their original encoded pixel payload. Oriented JPEG cleanup
+normalizes orientation and re-encodes at JPEG quality 95 so stale orientation is not preserved.
+The conversion, resize, compression, and metadata-cleanup commands read only the requested local source image
 and write only the requested task-owned temporary output path. The backend publishes a
 collision-safe final compression output only when it is smaller than the source. They do not
-contain upload, cloud, server, or telemetry code.
+contain upload, cloud, server, or telemetry code. Metadata cleanup is best effort and is not a
+forensic guarantee for unknown private vendor fields.
 
 Third-party Rust dependencies linked into this sidecar:
 - serde 1.0.228: MIT OR Apache-2.0

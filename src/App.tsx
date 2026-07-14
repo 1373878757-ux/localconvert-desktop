@@ -178,6 +178,32 @@ type ImageCompressResult = {
   message: string;
 };
 
+type ImageCleanMetadataResult = {
+  success: boolean;
+  operation: "clean-metadata";
+  sourcePath: string;
+  plannedOutputPath: string;
+  outputPath: string;
+  sourceFormat: string;
+  changed: boolean;
+  published: boolean;
+  metadataItemsRemoved: number;
+  removedKinds: string[];
+  pixelDataPreserved: boolean;
+  reencoded: boolean;
+  sourceBytes: number;
+  outputBytes: number;
+  sourceWidth: number;
+  sourceHeight: number;
+  outputWidth: number;
+  outputHeight: number;
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+  timedOut: boolean;
+  message: string;
+};
+
 type BackendTaskStatus =
   | "queued"
   | "running"
@@ -472,6 +498,7 @@ function App() {
     { label: "批量队列", enabled: true, note: "本地" },
     { label: "文档转 PDF", enabled: false, note: "稍后" },
     { label: "图片压缩", enabled: imageEngineAvailable, note: imageEngineAvailable ? "Preview" : "不可用" },
+    { label: "隐私清理", enabled: imageEngineAvailable, note: imageEngineAvailable ? "Preview 0.5" : "不可用" },
     { label: "图片转 PDF", enabled: false, note: "稍后" }
   ];
   const realLocalPdfTasks = tasks.filter(
@@ -597,6 +624,13 @@ function App() {
     selectedConvertingImageTasks.length === 0 &&
     (selectedJpegTasks.length === 0 || jpegQualityValidation.valid) &&
     (selectedWebpTasks.length === 0 || webpQualityValidation.valid);
+  const canCleanSelectedImageMetadata =
+    imageEngineAvailable &&
+    selectedTasks.length > 0 &&
+    selectedUnsupportedImageTasks.length === 0 &&
+    selectedImageTasksWithoutPath.length === 0 &&
+    selectedCancelledImageTasks.length === 0 &&
+    selectedConvertingImageTasks.length === 0;
 
   async function planBackendOutput(task: LocalTask, targetExtension = "pdf") {
     if (task.sourceKind !== "native-path" || !task.sourcePath) {
@@ -779,6 +813,29 @@ function App() {
     ].join("\n");
   }
 
+  function formatImageMetadataCleanupLog(result: ImageCleanMetadataResult) {
+    return [
+      `引擎消息: ${result.message}`,
+      `源文件: ${result.sourcePath || "不可用"}`,
+      `计划输出: ${result.plannedOutputPath || "未规划"}`,
+      `实际输出: ${result.outputPath || "未生成"}`,
+      `格式: ${result.sourceFormat || "未知"}`,
+      `已清理: ${result.changed ? "是" : "否"}`,
+      `已移除项目: ${result.metadataItemsRemoved}`,
+      `类型: ${result.removedKinds.length > 0 ? result.removedKinds.join("、") : "未发现"}`,
+      `像素编码保持: ${result.pixelDataPreserved ? "是" : "否"}`,
+      `高质量重编码: ${result.reencoded ? "是（用于固化 JPEG 方向）" : "否"}`,
+      `源尺寸: ${result.sourceWidth > 0 && result.sourceHeight > 0 ? `${result.sourceWidth} × ${result.sourceHeight}` : "未验证"}`,
+      `输出尺寸: ${result.outputWidth > 0 && result.outputHeight > 0 ? `${result.outputWidth} × ${result.outputHeight}` : "未生成"}`,
+      `源大小: ${formatBytes(result.sourceBytes)}`,
+      `输出大小: ${formatBytes(result.outputBytes)}`,
+      `退出码: ${result.exitCode ?? "无"}`,
+      `是否超时: ${result.timedOut ? "是" : "否"}`,
+      result.stdout ? `stdout:\n${result.stdout}` : "stdout: <空>",
+      result.stderr ? `stderr:\n${result.stderr}` : "stderr: <空>"
+    ].join("\n");
+  }
+
   function formatEngineMessage(engine: EngineStatus) {
     if (engine.status === "not-installed") {
       return "尚未内置。";
@@ -789,7 +846,7 @@ function App() {
     }
 
     if (engine.name === "image-engine" && engine.status === "available") {
-      return "image-engine 可用，JPG、PNG、WebP 本地转换、改尺寸与压缩已通过自检。";
+      return "image-engine 可用，JPG、PNG、WebP 本地转换、改尺寸、压缩与元数据清理已通过自检。";
     }
 
     if (engine.status === "error") {
@@ -992,6 +1049,31 @@ function App() {
     }
 
     return `已选择 ${selectedRealLocalImageTasks.length} 张本地图片。JPEG 质量 ${jpegQualityValidation.value ?? 82}，WebP 质量 ${webpQualityValidation.value ?? 80}，PNG 固定无损优化。仅在结果更小时生成新文件。`;
+  }
+
+  function imageMetadataCleanupGuidance() {
+    if (!imageEngineAvailable) {
+      return "内置 image-engine 不可用，图片元数据清理保持禁用。";
+    }
+    if (selectedTasks.length === 0) {
+      return "请在任务队列中选择 JPG、JPEG、PNG 或 WebP 图片。";
+    }
+    if (selectedHeicImageTasks.length > 0) {
+      return `所选任务中有 ${selectedHeicImageTasks.length} 个 HEIC 文件。当前不支持 HEIC 元数据或方向处理，不会启动清理。`;
+    }
+    if (selectedUnsupportedImageTasks.length > 0) {
+      return "所选任务中含有不支持的格式。元数据清理仅启用 JPG/JPEG、PNG 和 WebP。";
+    }
+    if (selectedImageTasksWithoutPath.length > 0) {
+      return "部分图片只有预览元数据。真实清理需要通过原生“选择文件”或桌面拖放重新导入。";
+    }
+    if (selectedCancelledImageTasks.length > 0) {
+      return "已取消的图片任务不能清理，请先重试或移除。";
+    }
+    if (selectedConvertingImageTasks.length > 0) {
+      return "所选图片中已有任务正在处理，请等待完成。";
+    }
+    return `已选择 ${selectedRealLocalImageTasks.length} 张本地图片。将尽力移除常见隐私元数据；若未发现可清理内容，不生成新文件。`;
   }
 
   function addPreviewFiles(fileList: FileList | File[]) {
@@ -2194,6 +2276,138 @@ function App() {
     }
   }
 
+  async function cleanSelectedImageMetadata() {
+    if (!canCleanSelectedImageMetadata) {
+      setFolderMessage(imageMetadataCleanupGuidance());
+      return;
+    }
+
+    const cleanupTasks = selectedRealLocalImageTasks;
+    let publishedCount = 0;
+    let noMetadataCount = 0;
+    let failureCount = 0;
+    let cancelledCount = 0;
+    const outputPaths: string[] = [];
+    const noMetadataNames: string[] = [];
+
+    for (const task of cleanupTasks) {
+      if (cancelledTaskIdsRef.current.has(task.taskId)) {
+        cancelledCount += 1;
+        continue;
+      }
+      if (!task.sourcePath) {
+        failureCount += 1;
+        continue;
+      }
+
+      const backendTaskId = createBackendTaskId("image-clean-metadata", task.taskId);
+      cancelledTaskIdsRef.current.delete(task.taskId);
+      setTasks((currentTasks) =>
+        currentTasks.map((currentTask) =>
+          currentTask.taskId === task.taskId
+            ? {
+                ...currentTask,
+                backendTaskId,
+                status: "converting",
+                errorLog: ""
+              }
+            : currentTask
+        )
+      );
+
+      try {
+        const response = await invoke<BackendTaskResponse<ImageCleanMetadataResult>>(
+          "image_clean_metadata_file",
+          {
+            taskId: backendTaskId,
+            request: { source: task.sourcePath }
+          }
+        );
+        const result = response.result;
+        const resultStatus = backendResponseStatus(response);
+        const log = formatImageMetadataCleanupLog(result);
+        if (resultStatus === "cancelled") {
+          cancelledCount += 1;
+        } else if (result.success && result.published) {
+          publishedCount += 1;
+          outputPaths.push(result.outputPath);
+        } else if (result.success) {
+          noMetadataCount += 1;
+          noMetadataNames.push(task.displayName);
+        } else {
+          failureCount += 1;
+        }
+
+        setTasks((currentTasks) =>
+          currentTasks.map((currentTask) => {
+            if (currentTask.taskId !== task.taskId) {
+              return currentTask;
+            }
+            const status =
+              currentTask.status === "cancelled" ? "cancelled" : resultStatus;
+            return {
+              ...currentTask,
+              backendTaskId: undefined,
+              status,
+              outputPreview:
+                status === "completed"
+                  ? result.published && result.outputPath
+                    ? result.outputPath
+                    : result.message
+                  : currentTask.outputPreview,
+              errorLog: status === "failed" ? log : ""
+            };
+          })
+        );
+      } catch (error) {
+        const wasCancelled = cancelledTaskIdsRef.current.has(task.taskId);
+        if (wasCancelled) {
+          cancelledCount += 1;
+        } else {
+          failureCount += 1;
+        }
+        const message =
+          typeof error === "string"
+            ? error
+            : error instanceof Error
+              ? error.message
+              : "图片元数据清理失败。";
+        setTasks((currentTasks) =>
+          currentTasks.map((currentTask) =>
+            currentTask.taskId === task.taskId
+              ? {
+                  ...currentTask,
+                  backendTaskId: undefined,
+                  status:
+                    currentTask.status === "cancelled" || wasCancelled
+                      ? "cancelled"
+                      : "failed",
+                  errorLog:
+                    currentTask.status === "cancelled" || wasCancelled
+                      ? ""
+                      : message
+                }
+              : currentTask
+          )
+        );
+      }
+    }
+
+    const noMetadataSummary =
+      noMetadataCount > 0
+        ? `未发现可清理元数据 ${noMetadataCount} 个：${noMetadataNames.join("、")}；未生成新文件。`
+        : "";
+    if (failureCount === 0 && cancelledCount === 0) {
+      setFolderMessage(
+        `图片元数据清理完成：生成 ${publishedCount} 个 cleaned 文件。${noMetadataSummary}${outputPaths.length > 0 ? `输出：${outputPaths.join(" | ")}` : ""}`
+      );
+    } else {
+      setFolderMessage(
+        `图片元数据清理结束：生成 ${publishedCount}，无可清理内容 ${noMetadataCount}，失败 ${failureCount}，已取消 ${cancelledCount}。${noMetadataSummary}${failureCount > 0 ? "请查看失败任务的错误日志。" : "未保留已取消任务的未完成输出。"}`
+      );
+    }
+  }
+
   return (
     <main className="app-shell">
       <header className="top-bar">
@@ -2211,7 +2425,7 @@ function App() {
               : qpdfAvailable
                 ? "PDF qpdf 工具已启用"
                 : imageEngineAvailable
-                  ? "图片转换、改尺寸与压缩已启用"
+                  ? "图片转换、改尺寸、压缩与隐私清理已启用"
                   : "转换未启用"}
           </span>
         </div>
@@ -2241,7 +2455,7 @@ function App() {
           </nav>
           <div className="sidebar-note">
             <strong>本地工具预览</strong>
-            <span>PDF 工具与 JPG、PNG、WebP 图片转换、改尺寸和压缩已启用。Office 等其他能力仍未启用。</span>
+            <span>PDF 工具与 JPG、PNG、WebP 图片转换、改尺寸、压缩和元数据清理已启用。Office 等其他能力仍未启用。</span>
           </div>
         </aside>
 
@@ -2432,14 +2646,14 @@ function App() {
             </div>
           </section>
 
-          <section className="image-tools-panel" aria-label="Preview 0.4 图片工具">
+          <section className="image-tools-panel" aria-label="Preview 0.5 图片工具">
             <div className="pdf-tools-header">
               <div>
-                <p className="section-kicker">Preview 0.4 · 本地功能预览</p>
+                <p className="section-kicker">Preview 0.5 · 本地功能预览</p>
                 <h2>图片工具</h2>
                 <p>
                   {imageEngineAvailable
-                    ? "JPG、PNG、WebP 格式转换、等比改尺寸与同格式压缩已启用，仅在本机执行。"
+                    ? "JPG、PNG、WebP 格式转换、等比改尺寸、同格式压缩与元数据清理已启用，仅在本机执行。"
                     : "图片引擎不可用，图片操作保持禁用。"}
                 </p>
               </div>
@@ -2665,10 +2879,30 @@ function App() {
               </article>
 
               <article className="pdf-tool-card image-tool-card">
-                <h3>移除图片元数据</h3>
-                <p>独立移除 EXIF 等图片元数据的工具仍在规划中。</p>
-                <button type="button" disabled>
-                  稍后启用
+                <h3>图片元数据清理 <span className="preview-label">Preview 0.5</span></h3>
+                <p>尽力移除常见隐私元数据，保持源格式并写入 cleaned 输出，不修改原文件。</p>
+                <ul className="image-conversion-matrix" aria-label="元数据清理范围">
+                  <li>JPEG：EXIF / GPS / XMP / IPTC / 相机信息</li>
+                  <li>PNG：EXIF、文本与时间信息块</li>
+                  <li>WebP：EXIF 与 XMP 信息块</li>
+                </ul>
+                <div className="resize-invariants" aria-label="固定清理规则">
+                  <label><input type="checkbox" checked disabled readOnly />保持源格式</label>
+                  <label><input type="checkbox" checked disabled readOnly />无内容则不生成</label>
+                  <label><input type="checkbox" checked disabled readOnly />不修改原文件</label>
+                </div>
+                <p className="resize-guidance">
+                  {imageMetadataCleanupGuidance()}
+                </p>
+                <p className="resize-guidance">
+                  最佳努力清理：不保证所有私有厂商字段都能完全移除。带方向标记的 JPEG 会先固化方向并以质量 95 重编码。
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void cleanSelectedImageMetadata()}
+                  disabled={!canCleanSelectedImageMetadata}
+                >
+                  清理所选图片元数据
                 </button>
               </article>
             </div>
@@ -2796,7 +3030,7 @@ function App() {
               {startupError
                 ? `启动初始化报告问题：${startupError}`
                 : qpdfAvailable || imageEngineAvailable
-                  ? "PDF 工具与 JPG、PNG、WebP 图片转换和改尺寸会按可用引擎状态在本机启用。"
+                  ? "PDF 工具与 JPG、PNG、WebP 图片转换、改尺寸、压缩和元数据清理会按可用引擎状态在本机启用。"
                   : "转换引擎不可用。"}
             </p>
             <dl className="engine-list">
@@ -2813,7 +3047,7 @@ function App() {
             <h2>错误日志</h2>
             <pre className="log-box">
               {inspectorErrorLog ||
-                "暂无错误日志。PDF 操作或图片转换失败时会显示在这里。"}
+                "暂无错误日志。PDF 或图片操作失败时会显示在这里。"}
             </pre>
           </section>
 
@@ -2823,8 +3057,9 @@ function App() {
               <li>不上传。</li>
               <li>不会修改原文件。</li>
               <li>PDF 合并、拆分、页面提取和旋转仅使用内置本地 qpdf。</li>
-              <li>JPG、PNG、WebP 转换和改尺寸仅使用内置本地 image-engine。</li>
-              <li>Office、其他图片格式与其他图片操作仍未启用。</li>
+              <li>JPG、PNG、WebP 转换、改尺寸、压缩和元数据清理仅使用内置本地 image-engine。</li>
+              <li>元数据清理为最佳努力，不宣称法证级彻底清除。</li>
+              <li>Office、HEIC 与其他未列出的图片操作仍未启用。</li>
             </ul>
           </section>
         </aside>

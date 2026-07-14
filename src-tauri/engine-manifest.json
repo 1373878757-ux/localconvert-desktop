@@ -98,7 +98,7 @@
       "name": "image-engine",
       "displayName": "image-engine",
       "desktopOnly": true,
-      "responsibility": "Image conversion, compression, resizing, and EXIF removal.",
+      "responsibility": "Image conversion, compression, resizing, and best-effort metadata/privacy cleanup.",
       "requiredAssetTypes": [
         "sidecar"
       ]
@@ -134,11 +134,11 @@
     },
     {
       "name": "image-engine",
-      "version": "0.4.0-preview.0",
+      "version": "0.5.0-preview.0",
       "platform": "macos-aarch64",
       "type": "sidecar",
       "source": "first-party Rust source: src-tauri/src/bin/image-engine.rs; pinned image crate 0.25.10 codecs; webpx 0.4.0 with statically linked libwebp 1.6.0",
-      "sha256": "bbee18f57870eb9634e09fe5d447b815e36e540ceb6e4a440bd71cf49a2c93dd",
+      "sha256": "fbeb095b354d678344987a3c349111614aeb500082ba1a4e6f2e2a00283bf7a8",
       "license": "First-party LocalConvert Desktop sidecar with third-party Rust codec dependencies; see src-tauri/resources/licenses/image-engine-macos-aarch64-BUILD-NOTICE.txt, src-tauri/resources/licenses/webpx-0.4.0-LICENSE-MIT.txt, src-tauri/resources/licenses/libwebp-1.6.0-COPYING.txt, and src-tauri/resources/licenses/libwebp-1.6.0-PATENTS.txt",
       "destination": "src-tauri/binaries/macos-aarch64/image-engine"
     }

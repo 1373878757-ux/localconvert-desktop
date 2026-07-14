@@ -4,6 +4,7 @@ use image::{
         png::{CompressionType as PngCompressionType, FilterType as PngFilterType, PngEncoder},
     },
     imageops::FilterType as ResizeFilterType,
+    metadata::Orientation,
     DynamicImage, GenericImageView, ImageDecoder, ImageFormat, ImageReader, Rgb, RgbImage, Rgba,
     RgbaImage,
 };
@@ -15,7 +16,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const IMAGE_ENGINE_VERSION: &str = "0.4.0-preview.0";
+const IMAGE_ENGINE_VERSION: &str = "0.5.0-preview.0";
 const SELF_CHECK_MESSAGE: &str = "LocalConvert image-engine self-check ok";
 const MAX_RESIZE_DIMENSION: u32 = 16_384;
 const MAX_RESIZE_PIXELS: u64 = 64_000_000;
@@ -23,6 +24,7 @@ const MIN_COMPRESSION_QUALITY: u8 = 40;
 const MAX_COMPRESSION_QUALITY: u8 = 95;
 const DEFAULT_JPEG_QUALITY: u8 = 82;
 const DEFAULT_WEBP_QUALITY: u8 = 80;
+const METADATA_CLEANUP_JPEG_QUALITY: u8 = 95;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TargetFormat {
@@ -61,6 +63,12 @@ struct CompressOptions {
     quality: Option<u8>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct CleanMetadataOptions {
+    input: PathBuf,
+    output: PathBuf,
+}
+
 #[derive(Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct ResizeReport {
@@ -89,6 +97,31 @@ struct CompressionReport {
     output_bytes: u64,
 }
 
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct MetadataCleanupReport {
+    operation: &'static str,
+    format: &'static str,
+    changed: bool,
+    metadata_items_removed: u32,
+    removed_kinds: Vec<String>,
+    source_width: u32,
+    source_height: u32,
+    output_width: u32,
+    output_height: u32,
+    source_bytes: u64,
+    output_bytes: u64,
+    pixel_data_preserved: bool,
+    reencoded: bool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct StrippedMetadata {
+    bytes: Vec<u8>,
+    metadata_items_removed: u32,
+    removed_kinds: Vec<String>,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum CliCommand {
     Version,
@@ -96,6 +129,7 @@ enum CliCommand {
     Convert(ConvertOptions),
     Resize(ResizeOptions),
     Compress(CompressOptions),
+    CleanMetadata(CleanMetadataOptions),
 }
 
 fn main() {
@@ -136,6 +170,11 @@ where
             serde_json::to_string(&report)
                 .map_err(|error| format!("Unable to serialize compression result: {error}"))
         }
+        CliCommand::CleanMetadata(options) => {
+            let report = clean_image_metadata(&options)?;
+            serde_json::to_string(&report)
+                .map_err(|error| format!("Unable to serialize metadata cleanup result: {error}"))
+        }
     }
 }
 
@@ -160,8 +199,46 @@ where
         Some("convert") => parse_convert_args(args).map(CliCommand::Convert),
         Some("resize") => parse_resize_args(args).map(CliCommand::Resize),
         Some("compress") => parse_compress_args(args).map(CliCommand::Compress),
+        Some("clean-metadata") => parse_clean_metadata_args(args).map(CliCommand::CleanMetadata),
         _ => Err(usage_error("Unsupported image-engine command.")),
     }
+}
+
+fn parse_clean_metadata_args<I>(args: I) -> Result<CleanMetadataOptions, String>
+where
+    I: IntoIterator<Item = OsString>,
+{
+    let mut args = args.into_iter();
+    let mut input = None;
+    let mut output = None;
+
+    while let Some(flag) = args.next() {
+        let value = args.next().ok_or_else(|| {
+            usage_error(&format!("Missing value for {}.", flag.to_string_lossy()))
+        })?;
+
+        match flag.to_str() {
+            Some("--input") if input.is_none() => input = Some(PathBuf::from(value)),
+            Some("--output") if output.is_none() => output = Some(PathBuf::from(value)),
+            Some("--input" | "--output") => {
+                return Err(usage_error(&format!(
+                    "Duplicate option: {}.",
+                    flag.to_string_lossy()
+                )))
+            }
+            _ => {
+                return Err(usage_error(&format!(
+                    "Unsupported option: {}.",
+                    flag.to_string_lossy()
+                )))
+            }
+        }
+    }
+
+    Ok(CleanMetadataOptions {
+        input: input.ok_or_else(|| usage_error("--input is required."))?,
+        output: output.ok_or_else(|| usage_error("--output is required."))?,
+    })
 }
 
 fn parse_compress_args<I>(args: I) -> Result<CompressOptions, String>
@@ -408,7 +485,7 @@ where
 
 fn usage_error(message: &str) -> String {
     format!(
-        "{message} Usage: image-engine --version | --self-check | convert --input <path> --output <path> --format <jpg|png|webp> | resize --input <path> --output <path> --mode <fit|width|height> [--max-width <pixels>] [--max-height <pixels>] | compress --input <path> --output <path> [--quality <40-95>]"
+        "{message} Usage: image-engine --version | --self-check | convert --input <path> --output <path> --format <jpg|png|webp> | resize --input <path> --output <path> --mode <fit|width|height> [--max-width <pixels>] [--max-height <pixels>] | compress --input <path> --output <path> [--quality <40-95>] | clean-metadata --input <path> --output <path>"
     )
 }
 
@@ -546,6 +623,345 @@ fn compress_image(options: &CompressOptions) -> Result<CompressionReport, String
         source_bytes,
         output_bytes,
     })
+}
+
+fn clean_image_metadata(options: &CleanMetadataOptions) -> Result<MetadataCleanupReport, String> {
+    let source_format = source_format(&options.input)?;
+    validate_input_file(&options.input)?;
+    validate_output_path(&options.output, source_format)?;
+
+    let source_bytes = fs::read(&options.input)
+        .map_err(|error| format!("Unable to read input image container: {error}"))?;
+    let source_byte_count = u64::try_from(source_bytes.len())
+        .map_err(|_| "Input image is too large to inspect safely.".to_string())?;
+    let (source_width, source_height) = image::image_dimensions(&options.input)
+        .map_err(|error| format!("Unable to inspect input image dimensions: {error}"))?;
+
+    let stripped = match source_format {
+        TargetFormat::Jpeg => strip_jpeg_metadata(&source_bytes)?,
+        TargetFormat::Png => strip_png_metadata(&source_bytes)?,
+        TargetFormat::WebP => strip_webp_metadata(&source_bytes)?,
+    };
+    if stripped.metadata_items_removed == 0 {
+        return Ok(MetadataCleanupReport {
+            operation: "clean-metadata",
+            format: source_format.extension(),
+            changed: false,
+            metadata_items_removed: 0,
+            removed_kinds: Vec::new(),
+            source_width,
+            source_height,
+            output_width: source_width,
+            output_height: source_height,
+            source_bytes: source_byte_count,
+            output_bytes: 0,
+            pixel_data_preserved: true,
+            reencoded: false,
+        });
+    }
+
+    let orientation = if source_format == TargetFormat::Jpeg {
+        read_image_orientation(&options.input, source_format)?
+    } else {
+        Orientation::NoTransforms
+    };
+    let reencoded = orientation != Orientation::NoTransforms;
+    if reencoded {
+        let image = decode_oriented_image(&options.input, source_format)?;
+        write_compressed_image_create_new(
+            &image,
+            &options.output,
+            TargetFormat::Jpeg,
+            Some(METADATA_CLEANUP_JPEG_QUALITY),
+        )?;
+    } else {
+        write_bytes_create_new(&stripped.bytes, &options.output)?;
+    }
+
+    let output_bytes = fs::metadata(&options.output)
+        .map_err(|error| format!("Unable to inspect cleaned image size: {error}"))?
+        .len();
+    if output_bytes == 0 {
+        return Err("Metadata cleanup produced an empty image.".to_string());
+    }
+    let (output_width, output_height) = image::image_dimensions(&options.output)
+        .map_err(|error| format!("Unable to validate cleaned image: {error}"))?;
+
+    Ok(MetadataCleanupReport {
+        operation: "clean-metadata",
+        format: source_format.extension(),
+        changed: true,
+        metadata_items_removed: stripped.metadata_items_removed,
+        removed_kinds: stripped.removed_kinds,
+        source_width,
+        source_height,
+        output_width,
+        output_height,
+        source_bytes: source_byte_count,
+        output_bytes,
+        pixel_data_preserved: !reencoded,
+        reencoded,
+    })
+}
+
+fn read_image_orientation(
+    input: &Path,
+    expected_source_format: TargetFormat,
+) -> Result<Orientation, String> {
+    let reader = ImageReader::open(input)
+        .map_err(|error| format!("Unable to open input image: {error}"))?
+        .with_guessed_format()
+        .map_err(|error| format!("Unable to detect input image format: {error}"))?;
+    if reader.format() != Some(expected_source_format.image_format()) {
+        return Err(format!(
+            "Input image content does not match its .{} extension.",
+            expected_source_format.extension()
+        ));
+    }
+    let mut decoder = reader
+        .into_decoder()
+        .map_err(|error| format!("Unable to decode input image metadata: {error}"))?;
+    decoder
+        .orientation()
+        .map_err(|error| format!("Unable to read input image orientation: {error}"))
+}
+
+fn strip_jpeg_metadata(source: &[u8]) -> Result<StrippedMetadata, String> {
+    if !source.starts_with(&[0xff, 0xd8]) {
+        return Err("Input JPEG has an invalid SOI marker.".to_string());
+    }
+
+    let mut output = Vec::with_capacity(source.len());
+    output.extend_from_slice(&source[..2]);
+    let mut offset = 2;
+    let mut removed_count = 0_u32;
+    let mut removed_kinds = Vec::new();
+
+    while offset < source.len() {
+        let marker_start = offset;
+        if source[offset] != 0xff {
+            return Err("Input JPEG contains invalid marker data before the scan.".to_string());
+        }
+        while offset < source.len() && source[offset] == 0xff {
+            offset += 1;
+        }
+        let marker = *source
+            .get(offset)
+            .ok_or_else(|| "Input JPEG ends inside a marker.".to_string())?;
+        offset += 1;
+
+        if marker == 0xda || marker == 0xd9 {
+            output.extend_from_slice(&source[marker_start..]);
+            return Ok(StrippedMetadata {
+                bytes: output,
+                metadata_items_removed: removed_count,
+                removed_kinds,
+            });
+        }
+
+        if marker == 0x01 || (0xd0..=0xd8).contains(&marker) {
+            output.extend_from_slice(&source[marker_start..offset]);
+            continue;
+        }
+
+        let length_end = offset
+            .checked_add(2)
+            .ok_or_else(|| "Input JPEG segment length overflowed.".to_string())?;
+        let length_bytes = source
+            .get(offset..length_end)
+            .ok_or_else(|| "Input JPEG ends before a segment length.".to_string())?;
+        let segment_length = usize::from(u16::from_be_bytes([length_bytes[0], length_bytes[1]]));
+        if segment_length < 2 {
+            return Err("Input JPEG contains an invalid segment length.".to_string());
+        }
+        let segment_end = offset
+            .checked_add(segment_length)
+            .ok_or_else(|| "Input JPEG segment length overflowed.".to_string())?;
+        let payload = source
+            .get(length_end..segment_end)
+            .ok_or_else(|| "Input JPEG ends inside a segment.".to_string())?;
+
+        let removed_kind = match marker {
+            0xe1 if payload.starts_with(b"Exif\0\0") => Some("EXIF and GPS"),
+            0xe1 if payload.starts_with(b"http://ns.adobe.com/xap/1.0/\0") => Some("XMP"),
+            0xe1 => Some("JPEG APP1 metadata"),
+            0xec => Some("JPEG camera metadata"),
+            0xed => Some("IPTC/Photoshop metadata"),
+            0xfe => Some("JPEG comments"),
+            _ => None,
+        };
+        if let Some(kind) = removed_kind {
+            removed_count = removed_count.saturating_add(1);
+            record_removed_kind(&mut removed_kinds, kind);
+        } else {
+            output.extend_from_slice(&source[marker_start..segment_end]);
+        }
+        offset = segment_end;
+    }
+
+    Err("Input JPEG does not contain a complete scan or EOI marker.".to_string())
+}
+
+fn strip_png_metadata(source: &[u8]) -> Result<StrippedMetadata, String> {
+    const PNG_SIGNATURE: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
+    if !source.starts_with(PNG_SIGNATURE) {
+        return Err("Input PNG has an invalid signature.".to_string());
+    }
+
+    let mut output = Vec::with_capacity(source.len());
+    output.extend_from_slice(PNG_SIGNATURE);
+    let mut offset = PNG_SIGNATURE.len();
+    let mut removed_count = 0_u32;
+    let mut removed_kinds = Vec::new();
+    let mut saw_iend = false;
+
+    while offset < source.len() {
+        let header_end = offset
+            .checked_add(8)
+            .ok_or_else(|| "Input PNG chunk header overflowed.".to_string())?;
+        let header = source
+            .get(offset..header_end)
+            .ok_or_else(|| "Input PNG ends inside a chunk header.".to_string())?;
+        let chunk_length = usize::try_from(u32::from_be_bytes([
+            header[0], header[1], header[2], header[3],
+        ]))
+        .map_err(|_| "Input PNG chunk is too large for this platform.".to_string())?;
+        let chunk_type = &header[4..8];
+        let chunk_end = header_end
+            .checked_add(chunk_length)
+            .and_then(|end| end.checked_add(4))
+            .ok_or_else(|| "Input PNG chunk length overflowed.".to_string())?;
+        source
+            .get(offset..chunk_end)
+            .ok_or_else(|| "Input PNG ends inside a chunk.".to_string())?;
+
+        let removed_kind = match chunk_type {
+            b"eXIf" => Some("EXIF and GPS"),
+            b"tEXt" | b"zTXt" | b"iTXt" => Some("PNG text metadata"),
+            b"tIME" => Some("PNG timestamp metadata"),
+            _ => None,
+        };
+        if let Some(kind) = removed_kind {
+            removed_count = removed_count.saturating_add(1);
+            record_removed_kind(&mut removed_kinds, kind);
+        } else {
+            output.extend_from_slice(&source[offset..chunk_end]);
+        }
+        offset = chunk_end;
+        if chunk_type == b"IEND" {
+            saw_iend = true;
+            break;
+        }
+    }
+
+    if !saw_iend || offset != source.len() {
+        return Err("Input PNG does not end with a complete IEND chunk.".to_string());
+    }
+    Ok(StrippedMetadata {
+        bytes: output,
+        metadata_items_removed: removed_count,
+        removed_kinds,
+    })
+}
+
+fn strip_webp_metadata(source: &[u8]) -> Result<StrippedMetadata, String> {
+    if source.len() < 12 || &source[..4] != b"RIFF" || &source[8..12] != b"WEBP" {
+        return Err("Input WebP has an invalid RIFF header.".to_string());
+    }
+    let declared_size = usize::try_from(u32::from_le_bytes([
+        source[4], source[5], source[6], source[7],
+    ]))
+    .map_err(|_| "Input WebP RIFF size is too large for this platform.".to_string())?;
+    if declared_size.checked_add(8) != Some(source.len()) {
+        return Err("Input WebP RIFF size does not match the file length.".to_string());
+    }
+
+    let mut output = Vec::with_capacity(source.len());
+    output.extend_from_slice(b"RIFF\0\0\0\0WEBP");
+    let mut offset = 12;
+    let mut removed_count = 0_u32;
+    let mut removed_kinds = Vec::new();
+
+    while offset < source.len() {
+        let header_end = offset
+            .checked_add(8)
+            .ok_or_else(|| "Input WebP chunk header overflowed.".to_string())?;
+        let header = source
+            .get(offset..header_end)
+            .ok_or_else(|| "Input WebP ends inside a chunk header.".to_string())?;
+        let chunk_type = &header[..4];
+        let chunk_length = usize::try_from(u32::from_le_bytes([
+            header[4], header[5], header[6], header[7],
+        ]))
+        .map_err(|_| "Input WebP chunk is too large for this platform.".to_string())?;
+        let padded_length = chunk_length
+            .checked_add(chunk_length % 2)
+            .ok_or_else(|| "Input WebP chunk length overflowed.".to_string())?;
+        let chunk_end = header_end
+            .checked_add(padded_length)
+            .ok_or_else(|| "Input WebP chunk length overflowed.".to_string())?;
+        source
+            .get(offset..chunk_end)
+            .ok_or_else(|| "Input WebP ends inside a chunk.".to_string())?;
+
+        match chunk_type {
+            b"EXIF" => {
+                removed_count = removed_count.saturating_add(1);
+                record_removed_kind(&mut removed_kinds, "EXIF and GPS");
+            }
+            b"XMP " => {
+                removed_count = removed_count.saturating_add(1);
+                record_removed_kind(&mut removed_kinds, "XMP");
+            }
+            b"VP8X" if chunk_length >= 1 => {
+                let mut chunk = source[offset..chunk_end].to_vec();
+                let flags = chunk[8];
+                let cleaned_flags = flags & !0x0c;
+                if cleaned_flags != flags {
+                    chunk[8] = cleaned_flags;
+                    removed_count = removed_count.saturating_add(1);
+                    record_removed_kind(&mut removed_kinds, "WebP metadata flags");
+                }
+                output.extend_from_slice(&chunk);
+            }
+            _ => output.extend_from_slice(&source[offset..chunk_end]),
+        }
+        offset = chunk_end;
+    }
+
+    let riff_size = output
+        .len()
+        .checked_sub(8)
+        .and_then(|size| u32::try_from(size).ok())
+        .ok_or_else(|| "Cleaned WebP is too large for a RIFF container.".to_string())?;
+    output[4..8].copy_from_slice(&riff_size.to_le_bytes());
+
+    Ok(StrippedMetadata {
+        bytes: output,
+        metadata_items_removed: removed_count,
+        removed_kinds,
+    })
+}
+
+fn record_removed_kind(removed_kinds: &mut Vec<String>, kind: &str) {
+    if !removed_kinds.iter().any(|existing| existing == kind) {
+        removed_kinds.push(kind.to_string());
+    }
+}
+
+fn write_bytes_create_new(bytes: &[u8], output: &Path) -> Result<(), String> {
+    let output_file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(output)
+        .map_err(|error| format!("Unable to create cleaned image: {error}"))?;
+    let mut writer = BufWriter::new(output_file);
+    writer
+        .write_all(bytes)
+        .map_err(|error| format!("Unable to write cleaned image: {error}"))?;
+    writer
+        .flush()
+        .map_err(|error| format!("Unable to finish cleaned image: {error}"))
 }
 
 fn compression_quality_for_format(
@@ -999,6 +1415,94 @@ mod tests {
             .save_with_format(path, format)
             .expect("test image should be written");
         fs::read(path).expect("test image bytes should be readable")
+    }
+
+    fn jpeg_metadata_segment(marker: u8, payload: &[u8]) -> Vec<u8> {
+        let length = u16::try_from(payload.len() + 2).expect("test JPEG segment should fit");
+        let mut segment = vec![0xff, marker];
+        segment.extend_from_slice(&length.to_be_bytes());
+        segment.extend_from_slice(payload);
+        segment
+    }
+
+    fn inject_jpeg_segments(base: &[u8], segments: &[Vec<u8>]) -> Vec<u8> {
+        assert!(base.starts_with(&[0xff, 0xd8]));
+        let mut output =
+            Vec::with_capacity(base.len() + segments.iter().map(Vec::len).sum::<usize>());
+        output.extend_from_slice(&base[..2]);
+        for segment in segments {
+            output.extend_from_slice(segment);
+        }
+        output.extend_from_slice(&base[2..]);
+        output
+    }
+
+    fn png_crc32(chunk_type: &[u8; 4], payload: &[u8]) -> u32 {
+        let mut crc = 0xffff_ffff_u32;
+        for byte in chunk_type.iter().chain(payload) {
+            crc ^= u32::from(*byte);
+            for _ in 0..8 {
+                let mask = 0_u32.wrapping_sub(crc & 1);
+                crc = (crc >> 1) ^ (0xedb8_8320 & mask);
+            }
+        }
+        !crc
+    }
+
+    fn png_chunk(chunk_type: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+        let length = u32::try_from(payload.len()).expect("test PNG chunk should fit");
+        let mut chunk = Vec::with_capacity(payload.len() + 12);
+        chunk.extend_from_slice(&length.to_be_bytes());
+        chunk.extend_from_slice(chunk_type);
+        chunk.extend_from_slice(payload);
+        chunk.extend_from_slice(&png_crc32(chunk_type, payload).to_be_bytes());
+        chunk
+    }
+
+    fn inject_png_chunks_before_iend(base: &[u8], chunks: &[Vec<u8>]) -> Vec<u8> {
+        let iend = base
+            .windows(4)
+            .rposition(|window| window == b"IEND")
+            .and_then(|type_offset| type_offset.checked_sub(4))
+            .expect("test PNG should contain IEND");
+        let mut output =
+            Vec::with_capacity(base.len() + chunks.iter().map(Vec::len).sum::<usize>());
+        output.extend_from_slice(&base[..iend]);
+        for chunk in chunks {
+            output.extend_from_slice(chunk);
+        }
+        output.extend_from_slice(&base[iend..]);
+        output
+    }
+
+    fn webp_chunk(chunk_type: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+        let length = u32::try_from(payload.len()).expect("test WebP chunk should fit");
+        let mut chunk = Vec::with_capacity(payload.len() + 9);
+        chunk.extend_from_slice(chunk_type);
+        chunk.extend_from_slice(&length.to_le_bytes());
+        chunk.extend_from_slice(payload);
+        if !payload.len().is_multiple_of(2) {
+            chunk.push(0);
+        }
+        chunk
+    }
+
+    fn add_webp_metadata(base: &[u8], width: u32, height: u32) -> Vec<u8> {
+        assert!(base.len() >= 12 && &base[..4] == b"RIFF" && &base[8..12] == b"WEBP");
+        let mut vp8x = vec![0x0c, 0, 0, 0];
+        let width_minus_one = width - 1;
+        let height_minus_one = height - 1;
+        vp8x.extend_from_slice(&width_minus_one.to_le_bytes()[..3]);
+        vp8x.extend_from_slice(&height_minus_one.to_le_bytes()[..3]);
+
+        let mut output = b"RIFF\0\0\0\0WEBP".to_vec();
+        output.extend_from_slice(&webp_chunk(b"VP8X", &vp8x));
+        output.extend_from_slice(&base[12..]);
+        output.extend_from_slice(&webp_chunk(b"EXIF", b"Exif\0\0GPS private test"));
+        output.extend_from_slice(&webp_chunk(b"XMP ", b"<x:xmpmeta>private</x:xmpmeta>"));
+        let riff_size = u32::try_from(output.len() - 8).expect("test WebP should fit");
+        output[4..8].copy_from_slice(&riff_size.to_le_bytes());
+        output
     }
 
     fn assert_corner_color(pixel: Rgba<u8>, expected: ExpectedColor) {
@@ -1592,6 +2096,213 @@ mod tests {
         );
         assert_eq!(read_orientation(&output), Orientation::NoTransforms);
         assert_eq!(fs::read(&source).unwrap(), source_before);
+
+        let _ = fs::remove_dir_all(case_dir);
+    }
+
+    #[test]
+    fn parses_clean_metadata_arguments_as_structured_paths() {
+        let command = parse_cli_args([
+            OsString::from("clean-metadata"),
+            OsString::from("--input"),
+            OsString::from("/tmp/客户 文件/手机 照片.jpg"),
+            OsString::from("--output"),
+            OsString::from("/tmp/客户 文件/converted/手机 照片 cleaned.jpg"),
+        ])
+        .expect("metadata cleanup command should parse");
+
+        assert_eq!(
+            command,
+            CliCommand::CleanMetadata(CleanMetadataOptions {
+                input: PathBuf::from("/tmp/客户 文件/手机 照片.jpg"),
+                output: PathBuf::from("/tmp/客户 文件/converted/手机 照片 cleaned.jpg"),
+            })
+        );
+    }
+
+    #[test]
+    fn strips_jpeg_exif_xmp_iptc_and_comments_without_reencoding() {
+        let case_dir = temp_case_dir("clean-jpeg-container");
+        let converted_dir = case_dir.join("converted");
+        fs::create_dir_all(&converted_dir).expect("converted directory should be created");
+        let source = case_dir.join("客户 照片.jpg");
+        let output = converted_dir.join("客户 照片 cleaned.jpg");
+        let base_path = case_dir.join("base.jpg");
+        let base = write_test_image(&base_path, 40, 24, ImageFormat::Jpeg);
+        let source_bytes = inject_jpeg_segments(
+            &base,
+            &[
+                jpeg_exif_orientation_segment(1),
+                jpeg_metadata_segment(0xe1, b"http://ns.adobe.com/xap/1.0/\0private-xmp"),
+                jpeg_metadata_segment(0xed, b"Photoshop 3.0\0private-iptc"),
+                jpeg_metadata_segment(0xfe, b"private comment"),
+            ],
+        );
+        fs::write(&source, &source_bytes).expect("metadata JPEG should be written");
+
+        let report = clean_image_metadata(&CleanMetadataOptions {
+            input: source.clone(),
+            output: output.clone(),
+        })
+        .expect("JPEG metadata cleanup should succeed");
+
+        assert!(report.changed);
+        assert_eq!(report.metadata_items_removed, 4);
+        assert!(report.pixel_data_preserved);
+        assert!(!report.reencoded);
+        assert_eq!(fs::read(&output).unwrap(), base);
+        assert_eq!(fs::read(&source).unwrap(), source_bytes);
+        assert_eq!(image::image_dimensions(&output).unwrap(), (40, 24));
+
+        let _ = fs::remove_dir_all(case_dir);
+    }
+
+    #[test]
+    fn normalizes_oriented_jpeg_before_removing_stale_exif() {
+        let case_dir = temp_case_dir("clean-oriented-jpeg");
+        let converted_dir = case_dir.join("converted");
+        fs::create_dir_all(&converted_dir).expect("converted directory should be created");
+        let source = case_dir.join("手机 方向.jpg");
+        let output = converted_dir.join("手机 方向 cleaned.jpg");
+        write_oriented_jpeg(&source, 6);
+        let source_before = fs::read(&source).expect("source should be readable");
+
+        let report = clean_image_metadata(&CleanMetadataOptions {
+            input: source.clone(),
+            output: output.clone(),
+        })
+        .expect("oriented JPEG cleanup should succeed");
+
+        assert!(report.changed);
+        assert!(report.reencoded);
+        assert!(!report.pixel_data_preserved);
+        assert_eq!((report.output_width, report.output_height), (24, 32));
+        assert_eq!(image::image_dimensions(&output).unwrap(), (24, 32));
+        assert_eq!(read_orientation(&output), Orientation::NoTransforms);
+        assert_eq!(fs::read(&source).unwrap(), source_before);
+
+        let _ = fs::remove_dir_all(case_dir);
+    }
+
+    #[test]
+    fn strips_png_text_exif_and_timestamp_chunks_without_changing_pixels() {
+        let case_dir = temp_case_dir("clean-png");
+        let converted_dir = case_dir.join("converted");
+        fs::create_dir_all(&converted_dir).expect("converted directory should be created");
+        let source = case_dir.join("截图 隐私.png");
+        let output = converted_dir.join("截图 隐私 cleaned.png");
+        let base_path = case_dir.join("base.png");
+        let base = write_test_image(&base_path, 23, 17, ImageFormat::Png);
+        let source_bytes = inject_png_chunks_before_iend(
+            &base,
+            &[
+                png_chunk(b"tEXt", b"Author\0private user"),
+                png_chunk(b"iTXt", b"XML:com.adobe.xmp\0\0\0\0\0private"),
+                png_chunk(b"eXIf", b"Exif private GPS"),
+                png_chunk(b"tIME", &[0x07, 0xe8, 1, 2, 3, 4, 5]),
+            ],
+        );
+        fs::write(&source, &source_bytes).expect("metadata PNG should be written");
+        let source_pixels = image::open(&source).unwrap().to_rgba8();
+
+        let report = clean_image_metadata(&CleanMetadataOptions {
+            input: source.clone(),
+            output: output.clone(),
+        })
+        .expect("PNG metadata cleanup should succeed");
+
+        assert!(report.changed);
+        assert_eq!(report.metadata_items_removed, 4);
+        assert!(report.pixel_data_preserved);
+        assert!(!report.reencoded);
+        assert_eq!(fs::read(&output).unwrap(), base);
+        assert_eq!(image::open(&output).unwrap().to_rgba8(), source_pixels);
+        assert_eq!(fs::read(&source).unwrap(), source_bytes);
+
+        let _ = fs::remove_dir_all(case_dir);
+    }
+
+    #[test]
+    fn strips_webp_exif_xmp_and_metadata_flags_without_reencoding() {
+        let case_dir = temp_case_dir("clean-webp");
+        let converted_dir = case_dir.join("converted");
+        fs::create_dir_all(&converted_dir).expect("converted directory should be created");
+        let source = case_dir.join("网页 隐私.webp");
+        let output = converted_dir.join("网页 隐私 cleaned.webp");
+        let base_path = case_dir.join("base.webp");
+        let base = write_test_image(&base_path, 29, 19, ImageFormat::WebP);
+        let source_bytes = add_webp_metadata(&base, 29, 19);
+        fs::write(&source, &source_bytes).expect("metadata WebP should be written");
+        let source_pixels = image::open(&source).unwrap().to_rgba8();
+
+        let report = clean_image_metadata(&CleanMetadataOptions {
+            input: source.clone(),
+            output: output.clone(),
+        })
+        .expect("WebP metadata cleanup should succeed");
+
+        assert!(report.changed);
+        assert_eq!(report.metadata_items_removed, 3);
+        assert!(report.pixel_data_preserved);
+        assert!(!report.reencoded);
+        assert_eq!(image::open(&output).unwrap().to_rgba8(), source_pixels);
+        let output_bytes = fs::read(&output).unwrap();
+        assert!(!output_bytes.windows(4).any(|window| window == b"EXIF"));
+        assert!(!output_bytes.windows(4).any(|window| window == b"XMP "));
+        assert_eq!(fs::read(&source).unwrap(), source_bytes);
+
+        let _ = fs::remove_dir_all(case_dir);
+    }
+
+    #[test]
+    fn metadata_cleanup_skips_output_when_nothing_is_removable() {
+        let case_dir = temp_case_dir("clean-no-metadata");
+        let converted_dir = case_dir.join("converted");
+        fs::create_dir_all(&converted_dir).expect("converted directory should be created");
+        let source = case_dir.join("plain.png");
+        let output = converted_dir.join("plain cleaned.png");
+        let source_before = write_test_image(&source, 12, 10, ImageFormat::Png);
+
+        let report = clean_image_metadata(&CleanMetadataOptions {
+            input: source.clone(),
+            output: output.clone(),
+        })
+        .expect("metadata-free image should return a no-change report");
+
+        assert!(!report.changed);
+        assert_eq!(report.metadata_items_removed, 0);
+        assert_eq!(report.output_bytes, 0);
+        assert!(!output.exists());
+        assert_eq!(fs::read(&source).unwrap(), source_before);
+
+        let _ = fs::remove_dir_all(case_dir);
+    }
+
+    #[test]
+    fn metadata_cleanup_refuses_existing_output_and_unsupported_input() {
+        let case_dir = temp_case_dir("clean-validation");
+        let converted_dir = case_dir.join("converted");
+        fs::create_dir_all(&converted_dir).expect("converted directory should be created");
+        let source = case_dir.join("private.jpg");
+        write_oriented_jpeg(&source, 1);
+        let output = converted_dir.join("private cleaned.jpg");
+        fs::write(&output, b"existing user output").expect("existing output should be written");
+
+        assert!(clean_image_metadata(&CleanMetadataOptions {
+            input: source,
+            output: output.clone(),
+        })
+        .is_err());
+        assert_eq!(fs::read(&output).unwrap(), b"existing user output");
+
+        let heic = case_dir.join("phone.heic");
+        fs::write(&heic, b"not decoded").expect("HEIC fixture should be written");
+        let error = clean_image_metadata(&CleanMetadataOptions {
+            input: heic,
+            output: converted_dir.join("phone cleaned.heic"),
+        })
+        .expect_err("HEIC cleanup must remain disabled");
+        assert!(error.contains(".jpg, .jpeg, .png, or .webp"));
 
         let _ = fs::remove_dir_all(case_dir);
     }

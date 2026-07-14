@@ -371,6 +371,7 @@ pub fn run() {
             backend_tasks::image_convert_file,
             backend_tasks::image_resize_file,
             backend_tasks::image_compress_file,
+            backend_tasks::image_clean_metadata_file,
             image_ops::plan_image_convert,
             image_ops::plan_image_compress,
             image_ops::plan_image_resize,

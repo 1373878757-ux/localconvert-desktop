@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Preview 0.5 - Image Metadata Privacy Cleanup Preview
+
+- Aligned application version metadata to `0.5.0` for the Preview 0.5 development line.
+- Added best-effort local metadata cleanup for JPG/JPEG, PNG, and WebP through the existing first-party Rust `image-engine`.
+- Added container-level removal for common JPEG EXIF/XMP/IPTC/comment segments, PNG EXIF/text/time chunks, and WebP EXIF/XMP chunks while preserving encoded pixel payloads where feasible.
+- Added visual orientation normalization for JPEG files that depend on EXIF orientation; this necessary path uses a documented JPEG quality 95 re-encode before stale orientation metadata is removed.
+- Added collision-safe `cleaned` output naming, no-output behavior when no removable metadata is found, backend cancellation, task-owned temporary output, validation, and atomic no-overwrite publication.
+- Added a guarded Simplified Chinese Preview 0.5 metadata cleanup panel with explicit best-effort and non-forensic limitations.
+- Kept HEIC, RAW, GIF, TIFF, PDF, Office, video, and audio metadata cleanup disabled.
+- Added no new sidecar or Rust dependency and kept existing image conversion, resize, compression, and qpdf behavior unchanged.
+
 ### Preview 0.4 - Image Compression Preview
 
 - Aligned application version metadata to `0.4.0` for the Preview 0.4 development line.

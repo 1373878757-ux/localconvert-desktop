@@ -513,6 +513,6 @@ mod tests {
         let detection = detect_image_engine("macos-aarch64");
 
         assert_eq!(detection.status, "available");
-        assert!(detection.message.contains("0.4.0-preview.0"));
+        assert!(detection.message.contains("0.5.0-preview.0"));
     }
 }

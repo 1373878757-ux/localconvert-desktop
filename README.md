@@ -59,7 +59,9 @@ Preview 0.3 keeps the Preview 0.2 local image conversion matrix and adds local i
 
 Preview 0.4 adds local same-format image compression and size optimization for JPG/JPEG, PNG, and WebP on macOS Apple Silicon. JPEG accepts quality values from 40 through 95 and defaults to 82. WebP accepts quality values from 40 through 95 and defaults to 80. PNG uses lossless optimization only and has no lossy quality control. Compression always keeps the source format and extension, applies supported orientation metadata before encoding, and proposes a collision-safe filename containing `compressed`, such as `report compressed.jpg`. If the task-owned encoded result is not smaller than the source file, the backend does not publish a final output and reports `压缩后未变小，未生成新文件`. This preview does not guarantee that every source can be made smaller.
 
-A first-party Rust `image-engine` sidecar performs conversion, resizing, and compression locally and is enabled only after its startup version and self-check validation pass. Real operations require Tauri-native local paths; browser-only `File` tasks remain metadata previews. Image batches fail closed when any selected item has no native path, uses an unsupported format, has invalid dimensions or quality, is cancelled, or is already running. The Rust backend validates requests, creates the source-adjacent `converted` folder only at execution time, refuses overwrites, launches the sidecar with argument arrays, captures diagnostics, and validates the output before reporting success. JPEG and WebP orientation metadata exposed by the current decoder is applied to pixel data before conversion, resizing, or compression, and stale orientation metadata is not copied to the output. AVIF, TIFF/TIF, and HEIC remain disabled; metadata removal and images-to-PDF are not enabled yet. The current engine does not decode HEIC or apply HEIC orientation metadata.
+Preview 0.5 adds local metadata and privacy cleanup for JPG/JPEG, PNG, and WebP on macOS Apple Silicon. The first-party engine removes common EXIF, GPS, camera/device, XMP, IPTC, PNG text, and WebP EXIF/XMP container metadata where supported while preserving the source format and visual dimensions. PNG and WebP cleanup, and JPEG cleanup when no orientation transform is required, operate at the container level so encoded pixel payloads are preserved. A JPEG that relies on EXIF orientation is first normalized visually and then re-encoded at JPEG quality 95 before the stale orientation metadata is removed; this necessary JPEG path may change compressed pixel bytes slightly. Cleaned outputs use collision-safe names containing `cleaned`, such as `report cleaned.jpg`. If no removable metadata is found, the backend publishes no final output and reports `未发现可清理的元数据，未生成新文件`. This is a best-effort privacy tool, not forensic-grade sanitization, and users should verify important files before sharing.
+
+A first-party Rust `image-engine` sidecar performs conversion, resizing, compression, and metadata cleanup locally and is enabled only after its startup version and self-check validation pass. Real operations require Tauri-native local paths; browser-only `File` tasks remain metadata previews. Image batches fail closed when any selected item has no native path, uses an unsupported format, has invalid dimensions or quality, is cancelled, or is already running. The Rust backend validates requests, creates the source-adjacent `converted` folder only at execution time, refuses overwrites, launches the sidecar with argument arrays, captures diagnostics, and validates the output before reporting success. JPEG and WebP orientation metadata exposed by the current decoder is applied to pixel data before conversion, resizing, or compression, and stale orientation metadata is not copied to the output. AVIF, TIFF/TIF, HEIC, GIF, and RAW remain disabled for metadata cleanup; images-to-PDF is not enabled yet. The current engine does not decode HEIC or apply HEIC orientation metadata.
 
 ## Platform Matrix
 
@@ -104,7 +106,7 @@ Runtime installers should include the conversion engines required for the suppor
 | LibreOffice headless | Office-to-PDF conversion for DOC, DOCX, PPT, PPTX, XLS, XLSX, ODT, ODS, and ODP. | `sidecar`, `runtime-folder` |
 | qpdf | PDF structure operations such as merge, split, page extraction, and rotation. | `sidecar` |
 | PDFium | PDF rasterization, page-to-image conversion, thumbnails, and previews. | `library` |
-| image-engine | Image conversion, compression, resizing, and EXIF removal. | `sidecar` |
+| image-engine | Image conversion, compression, resizing, and best-effort metadata/privacy cleanup. | `sidecar` |
 
 The exact packaging layout can vary by platform, but the app should resolve engines from its own bundled resources instead of expecting users to install command-line tools manually.
 
@@ -231,7 +233,7 @@ Office rendering can differ from the source application's native output. The v1 
 
 ## Development Setup
 
-This repository includes a Tauri v2, React, and TypeScript desktop app for LocalConvert Desktop. The current Preview 0.4 implementation includes a Simplified Chinese UI, branded startup splash screen, Tauri-native file selection and drag-and-drop intake, a local task queue, backend output path planning, the bundled macOS Apple Silicon qpdf sidecar, startup engine self-checks, real local PDF merge, split, page extraction, and rotate execution, and real local JPG/JPEG, PNG, and WebP conversion, resizing, and same-format compression through the first-party Rust `image-engine` sidecar. Each startup engine smoke check has a three-second timeout; a failed, timed-out, or panicking check is stored as a local startup error and never prevents the main window from opening after the splash minimum display time. Real qpdf and image-engine jobs run through an asynchronous Rust task registry with task-ID status arbitration, child-process cancellation, task-owned temporary outputs, validated atomic no-overwrite publication, and scoped cleanup. Compression outputs are published only when they are smaller than their source. Native desktop intake records validated absolute paths and reads filesystem metadata only; browser-only `File` fallback tasks remain metadata previews and cannot run real conversion operations. AVIF, TIFF/TIF, HEIC, metadata removal, images-to-PDF, Office conversion, and PDFium rasterization remain disabled until intentionally enabled in later implementation steps.
+This repository includes a Tauri v2, React, and TypeScript desktop app for LocalConvert Desktop. The current Preview 0.5 implementation includes a Simplified Chinese UI, branded startup splash screen, Tauri-native file selection and drag-and-drop intake, a local task queue, backend output path planning, the bundled macOS Apple Silicon qpdf sidecar, startup engine self-checks, real local PDF merge, split, page extraction, and rotate execution, and real local JPG/JPEG, PNG, and WebP conversion, resizing, same-format compression, and best-effort metadata cleanup through the first-party Rust `image-engine` sidecar. Each startup engine smoke check has a three-second timeout; a failed, timed-out, or panicking check is stored as a local startup error and never prevents the main window from opening after the splash minimum display time. Real qpdf and image-engine jobs run through an asynchronous Rust task registry with task-ID status arbitration, child-process cancellation, task-owned temporary outputs, validated atomic no-overwrite publication, and scoped cleanup. Compression outputs are published only when they are smaller than their source, and metadata cleanup outputs are published only when removable metadata is found. Native desktop intake records validated absolute paths and reads filesystem metadata only; browser-only `File` fallback tasks remain metadata previews and cannot run real conversion operations. AVIF, TIFF/TIF, HEIC, GIF, RAW, images-to-PDF, Office conversion, and PDFium rasterization remain disabled until intentionally enabled in later implementation steps.
 
 Development machines need the normal Tauri v2 toolchain requirements for the target platform, including Node.js, npm, Rust 1.89 or newer, Cargo, and platform-specific build dependencies. Rust 1.89 is required by the pinned WebP encoder used to build the first-party `image-engine` sidecar.
 
@@ -298,7 +300,7 @@ Current qpdf PDF tools checklist:
 - Repeat at least one operation from a folder path containing spaces.
 - Repeat at least one operation when the planned output name already exists and confirm auto-incremented collision naming.
 - Hash or otherwise compare source files before and after each operation and confirm sources are unchanged.
-- Confirm Office, image metadata tools, PDF rasterization, and preview tools remain disabled until their bundled engines or execution paths are intentionally added.
+- Confirm Office, unsupported image metadata formats, PDF rasterization, and preview tools remain disabled until their bundled engines or execution paths are intentionally added.
 
 Current image conversion checklist:
 
@@ -308,7 +310,7 @@ Current image conversion checklist:
 - Repeat a conversion with a Chinese filename and a path containing spaces.
 - Create an output collision and confirm the backend selects an incremented name instead of overwriting it.
 - Hash or otherwise compare the source image before and after conversion and confirm it is unchanged.
-- Confirm AVIF, TIFF/TIF, HEIC, metadata removal, and images-to-PDF remain disabled.
+- Confirm AVIF, TIFF/TIF, HEIC, GIF, RAW, and images-to-PDF remain disabled.
 
 Current image resize checklist:
 
@@ -330,6 +332,17 @@ Current image compression checklist:
 - Confirm published filenames include `compressed`, use collision numbering when needed, never overwrite an existing file, and leave the source hash unchanged.
 - Use a source that cannot be made smaller and confirm the task reports `压缩后未变小，未生成新文件` without publishing a final output.
 - Confirm cancellation leaves no final output or task-owned temporary directory.
+
+Current image metadata cleanup checklist:
+
+- Clean a JPEG containing EXIF, GPS, camera/device, XMP, or IPTC metadata and confirm the supported metadata is absent from the output.
+- Clean a JPEG with non-default EXIF orientation and confirm its visible orientation and dimensions are normalized before metadata is removed; note that this path requires a high-quality JPEG re-encode.
+- Clean PNG text metadata and WebP EXIF/XMP chunks and confirm dimensions and decoded pixels remain unchanged.
+- Confirm outputs keep the source format, use `cleaned` collision-safe names, and never overwrite existing files.
+- Use an image with no removable metadata and confirm the task reports `未发现可清理的元数据，未生成新文件` without publishing a final output.
+- Confirm HEIC, GIF, TIFF, RAW, PDF, Office, video, and audio metadata cleanup remain unavailable.
+- Confirm cancellation, failure, and unchanged results leave no final output or `.localconvert-task-*` directory, and confirm source hashes remain unchanged.
+- Treat cleanup as best effort: confirm the UI does not claim forensic-grade or complete removal of every private vendor field.
 
 Office-to-PDF:
 
@@ -390,7 +403,7 @@ Path handling:
 
 - Implement the v1 local conversion queue and default output rules.
 - Add reliable Office-to-PDF conversion with isolated LibreOffice execution.
-- Expand the current image conversion, resize, and compression preview with EXIF removal and images-to-PDF.
+- Expand the current image conversion, resize, compression, and metadata cleanup preview with images-to-PDF and carefully verified additional formats.
 - Add PDF merge, split, extraction, rotation, rasterization, and previews.
 - Add detailed per-task logs and batch summaries.
 - Add cross-platform packaging with bundled sidecar engines.

@@ -1,6 +1,7 @@
 use crate::{
     image_convert::{
-        self, ImageCompressExecutionRequest, ImageCompressResult, ImageConvertExecutionRequest,
+        self, ImageCleanMetadataExecutionRequest, ImageCleanMetadataResult,
+        ImageCompressExecutionRequest, ImageCompressResult, ImageConvertExecutionRequest,
         ImageConvertResult, ImageResizeExecutionRequest, ImageResizeResult,
     },
     qpdf::{
@@ -47,6 +48,7 @@ impl_task_execution_result!(QpdfRotateResult);
 impl_task_execution_result!(ImageConvertResult);
 impl_task_execution_result!(ImageResizeResult);
 impl_task_execution_result!(ImageCompressResult);
+impl_task_execution_result!(ImageCleanMetadataResult);
 
 async fn run_backend_task<T, F>(
     app: tauri::AppHandle,
@@ -170,6 +172,18 @@ pub(crate) async fn image_compress_file(
 ) -> Result<BackendTaskResponse<ImageCompressResult>, String> {
     run_backend_task(app, task_id, "image-compress", move |control| {
         image_convert::image_compress_task(request, control)
+    })
+    .await
+}
+
+#[tauri::command]
+pub(crate) async fn image_clean_metadata_file(
+    app: tauri::AppHandle,
+    task_id: String,
+    request: ImageCleanMetadataExecutionRequest,
+) -> Result<BackendTaskResponse<ImageCleanMetadataResult>, String> {
+    run_backend_task(app, task_id, "image-clean-metadata", move |control| {
+        image_convert::image_clean_metadata_task(request, control)
     })
     .await
 }
