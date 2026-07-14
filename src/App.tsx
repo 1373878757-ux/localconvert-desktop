@@ -154,6 +154,30 @@ type ImageResizeResult = {
   message: string;
 };
 
+type ImageCompressResult = {
+  success: boolean;
+  operation: "compress";
+  sourcePath: string;
+  plannedOutputPath: string;
+  outputPath: string;
+  sourceFormat: string;
+  quality: number | null;
+  lossless: boolean;
+  published: boolean;
+  smaller: boolean;
+  sourceBytes: number;
+  encodedBytes: number;
+  outputBytes: number;
+  savedBytes: number;
+  width: number;
+  height: number;
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+  timedOut: boolean;
+  message: string;
+};
+
 type BackendTaskStatus =
   | "queued"
   | "running"
@@ -187,8 +211,16 @@ type ResizeInputValidation = {
   message: string;
 };
 
+type CompressionQualityValidation = {
+  valid: boolean;
+  value?: number;
+  message: string;
+};
+
 const maxResizeDimension = 16_384;
 const maxResizePixels = 64_000_000;
+const minCompressionQuality = 40;
+const maxCompressionQuality = 95;
 
 const fallbackSelfCheck: EngineSelfCheck = {
   platform: "桌面预览",
@@ -325,6 +357,30 @@ function validateResizeInputs(
   };
 }
 
+function validateCompressionQuality(
+  value: string,
+  label: string
+): CompressionQualityValidation {
+  const normalized = value.trim();
+  if (!/^\d+$/.test(normalized)) {
+    return { valid: false, message: `${label}必须是整数。` };
+  }
+
+  const quality = Number(normalized);
+  if (
+    !Number.isSafeInteger(quality) ||
+    quality < minCompressionQuality ||
+    quality > maxCompressionQuality
+  ) {
+    return {
+      valid: false,
+      message: `${label}必须在 ${minCompressionQuality} 到 ${maxCompressionQuality} 之间。`
+    };
+  }
+
+  return { valid: true, value: quality, message: "" };
+}
+
 function App() {
   const [selfCheck, setSelfCheck] = useState<EngineSelfCheck>(fallbackSelfCheck);
   const [tasks, setTasks] = useState<LocalTask[]>([]);
@@ -340,6 +396,8 @@ function App() {
   const [resizeMode, setResizeMode] = useState<ResizeMode>("fit");
   const [resizeWidth, setResizeWidth] = useState("1920");
   const [resizeHeight, setResizeHeight] = useState("1080");
+  const [jpegCompressionQuality, setJpegCompressionQuality] = useState("82");
+  const [webpCompressionQuality, setWebpCompressionQuality] = useState("80");
   const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(
     () => new Set()
   );
@@ -413,7 +471,7 @@ function App() {
     { label: "图片工具", enabled: imageEngineAvailable, note: imageEngineAvailable ? "可用" : "不可用" },
     { label: "批量队列", enabled: true, note: "本地" },
     { label: "文档转 PDF", enabled: false, note: "稍后" },
-    { label: "图片压缩", enabled: false, note: "稍后" },
+    { label: "图片压缩", enabled: imageEngineAvailable, note: imageEngineAvailable ? "Preview" : "不可用" },
     { label: "图片转 PDF", enabled: false, note: "稍后" }
   ];
   const realLocalPdfTasks = tasks.filter(
@@ -516,6 +574,29 @@ function App() {
     selectedImageTasksWithoutPath.length === 0 &&
     selectedCancelledImageTasks.length === 0 &&
     selectedConvertingImageTasks.length === 0;
+  const selectedJpegTasks = selectedEnabledImageTasks.filter(
+    (task) => canonicalImageFormat(task.extension) === "jpg"
+  );
+  const selectedWebpTasks = selectedEnabledImageTasks.filter(
+    (task) => canonicalImageFormat(task.extension) === "webp"
+  );
+  const jpegQualityValidation = validateCompressionQuality(
+    jpegCompressionQuality,
+    "JPEG 质量"
+  );
+  const webpQualityValidation = validateCompressionQuality(
+    webpCompressionQuality,
+    "WebP 质量"
+  );
+  const canCompressSelectedImages =
+    imageEngineAvailable &&
+    selectedTasks.length > 0 &&
+    selectedUnsupportedImageTasks.length === 0 &&
+    selectedImageTasksWithoutPath.length === 0 &&
+    selectedCancelledImageTasks.length === 0 &&
+    selectedConvertingImageTasks.length === 0 &&
+    (selectedJpegTasks.length === 0 || jpegQualityValidation.valid) &&
+    (selectedWebpTasks.length === 0 || webpQualityValidation.valid);
 
   async function planBackendOutput(task: LocalTask, targetExtension = "pdf") {
     if (task.sourceKind !== "native-path" || !task.sourcePath) {
@@ -674,6 +755,30 @@ function App() {
     ].join("\n");
   }
 
+  function formatImageCompressLog(result: ImageCompressResult) {
+    const savedPercent =
+      result.sourceBytes > 0 && result.savedBytes > 0
+        ? ((result.savedBytes / result.sourceBytes) * 100).toFixed(1)
+        : "0.0";
+    return [
+      `引擎消息: ${result.message}`,
+      `源文件: ${result.sourcePath || "不可用"}`,
+      `计划输出: ${result.plannedOutputPath || "未规划"}`,
+      `实际输出: ${result.outputPath || "未生成"}`,
+      `格式: ${result.sourceFormat || "未知"}`,
+      `模式: ${result.lossless ? "PNG 无损优化" : `质量 ${result.quality ?? "未知"}`}`,
+      `尺寸: ${result.width > 0 && result.height > 0 ? `${result.width} × ${result.height}` : "未验证"}`,
+      `源大小: ${formatBytes(result.sourceBytes)}`,
+      `编码结果: ${formatBytes(result.encodedBytes)}`,
+      `已发布: ${result.published ? "是" : "否"}`,
+      `节省: ${formatBytes(result.savedBytes)} (${savedPercent}%)`,
+      `退出码: ${result.exitCode ?? "无"}`,
+      `是否超时: ${result.timedOut ? "是" : "否"}`,
+      result.stdout ? `stdout:\n${result.stdout}` : "stdout: <空>",
+      result.stderr ? `stderr:\n${result.stderr}` : "stderr: <空>"
+    ].join("\n");
+  }
+
   function formatEngineMessage(engine: EngineStatus) {
     if (engine.status === "not-installed") {
       return "尚未内置。";
@@ -684,7 +789,7 @@ function App() {
     }
 
     if (engine.name === "image-engine" && engine.status === "available") {
-      return "image-engine 可用，JPG、PNG、WebP 本地转换与改尺寸已通过自检。";
+      return "image-engine 可用，JPG、PNG、WebP 本地转换、改尺寸与压缩已通过自检。";
     }
 
     if (engine.status === "error") {
@@ -847,6 +952,46 @@ function App() {
     }
 
     return `已选择 ${selectedRealLocalImageTasks.length} 张本地图片。${resizeInputValidation.message}`;
+  }
+
+  function imageCompressionGuidance() {
+    if (!imageEngineAvailable) {
+      return "内置 image-engine 不可用，图片压缩保持禁用。";
+    }
+
+    if (selectedTasks.length === 0) {
+      return "请在任务队列中选择 JPG、JPEG、PNG 或 WebP 图片。";
+    }
+
+    if (selectedHeicImageTasks.length > 0) {
+      return `所选任务中有 ${selectedHeicImageTasks.length} 个 HEIC 文件。当前不支持 HEIC 解码、方向处理或压缩。`;
+    }
+
+    if (selectedUnsupportedImageTasks.length > 0) {
+      return "所选任务中含有不支持的格式。图片压缩仅启用 JPG/JPEG、PNG 和 WebP。";
+    }
+
+    if (selectedImageTasksWithoutPath.length > 0) {
+      return "部分图片只有预览元数据。真实压缩需要通过原生“选择文件”或桌面拖放重新导入。";
+    }
+
+    if (selectedCancelledImageTasks.length > 0) {
+      return "已取消的图片任务不能压缩，请先重试或移除。";
+    }
+
+    if (selectedConvertingImageTasks.length > 0) {
+      return "所选图片中已有任务正在处理，请等待完成。";
+    }
+
+    if (selectedJpegTasks.length > 0 && !jpegQualityValidation.valid) {
+      return jpegQualityValidation.message;
+    }
+
+    if (selectedWebpTasks.length > 0 && !webpQualityValidation.valid) {
+      return webpQualityValidation.message;
+    }
+
+    return `已选择 ${selectedRealLocalImageTasks.length} 张本地图片。JPEG 质量 ${jpegQualityValidation.value ?? 82}，WebP 质量 ${webpQualityValidation.value ?? 80}，PNG 固定无损优化。仅在结果更小时生成新文件。`;
   }
 
   function addPreviewFiles(fileList: FileList | File[]) {
@@ -1905,6 +2050,150 @@ function App() {
     }
   }
 
+  async function compressSelectedImages() {
+    if (!canCompressSelectedImages) {
+      setFolderMessage(imageCompressionGuidance());
+      return;
+    }
+
+    const compressionTasks = selectedRealLocalImageTasks;
+    const jpegQuality = jpegQualityValidation.value;
+    const webpQuality = webpQualityValidation.value;
+    let publishedCount = 0;
+    let notSmallerCount = 0;
+    let failureCount = 0;
+    let cancelledCount = 0;
+    const outputPaths: string[] = [];
+    const notSmallerNames: string[] = [];
+
+    for (const task of compressionTasks) {
+      if (cancelledTaskIdsRef.current.has(task.taskId)) {
+        cancelledCount += 1;
+        continue;
+      }
+
+      if (!task.sourcePath) {
+        failureCount += 1;
+        continue;
+      }
+
+      const format = canonicalImageFormat(task.extension);
+      const quality =
+        format === "jpg"
+          ? jpegQuality
+          : format === "webp"
+            ? webpQuality
+            : undefined;
+      const backendTaskId = createBackendTaskId("image-compress", task.taskId);
+      cancelledTaskIdsRef.current.delete(task.taskId);
+      setTasks((currentTasks) =>
+        currentTasks.map((currentTask) =>
+          currentTask.taskId === task.taskId
+            ? {
+                ...currentTask,
+                backendTaskId,
+                status: "converting",
+                errorLog: ""
+              }
+            : currentTask
+        )
+      );
+
+      try {
+        const response = await invoke<BackendTaskResponse<ImageCompressResult>>(
+          "image_compress_file",
+          {
+            taskId: backendTaskId,
+            request: {
+              source: task.sourcePath,
+              quality: quality ?? null
+            }
+          }
+        );
+        const result = response.result;
+        const resultStatus = backendResponseStatus(response);
+        const log = formatImageCompressLog(result);
+        if (resultStatus === "cancelled") {
+          cancelledCount += 1;
+        } else if (result.success && result.published) {
+          publishedCount += 1;
+          outputPaths.push(result.outputPath);
+        } else if (result.success) {
+          notSmallerCount += 1;
+          notSmallerNames.push(task.displayName);
+        } else {
+          failureCount += 1;
+        }
+
+        setTasks((currentTasks) =>
+          currentTasks.map((currentTask) => {
+            if (currentTask.taskId !== task.taskId) {
+              return currentTask;
+            }
+
+            const status =
+              currentTask.status === "cancelled" ? "cancelled" : resultStatus;
+            return {
+              ...currentTask,
+              backendTaskId: undefined,
+              status,
+              outputPreview:
+                status === "completed" && result.published && result.outputPath
+                  ? result.outputPath
+                  : currentTask.outputPreview,
+              errorLog: status === "failed" ? log : ""
+            };
+          })
+        );
+      } catch (error) {
+        const wasCancelled = cancelledTaskIdsRef.current.has(task.taskId);
+        if (wasCancelled) {
+          cancelledCount += 1;
+        } else {
+          failureCount += 1;
+        }
+        const message =
+          typeof error === "string"
+            ? error
+            : error instanceof Error
+              ? error.message
+              : "图片压缩失败。";
+        setTasks((currentTasks) =>
+          currentTasks.map((currentTask) =>
+            currentTask.taskId === task.taskId
+              ? {
+                  ...currentTask,
+                  backendTaskId: undefined,
+                  status:
+                    currentTask.status === "cancelled" || wasCancelled
+                      ? "cancelled"
+                      : "failed",
+                  errorLog:
+                    currentTask.status === "cancelled" || wasCancelled
+                      ? ""
+                      : message
+                }
+              : currentTask
+          )
+        );
+      }
+    }
+
+    const notSmallerSummary =
+      notSmallerCount > 0
+        ? `压缩后未变小、未生成新文件 ${notSmallerCount} 个：${notSmallerNames.join("、")}。`
+        : "";
+    if (failureCount === 0 && cancelledCount === 0) {
+      setFolderMessage(
+        `图片压缩处理完成：生成 ${publishedCount} 个文件。${notSmallerSummary}${outputPaths.length > 0 ? `输出：${outputPaths.join(" | ")}` : ""}`
+      );
+    } else {
+      setFolderMessage(
+        `图片压缩结束：生成 ${publishedCount}，未变小 ${notSmallerCount}，失败 ${failureCount}，已取消 ${cancelledCount}。${notSmallerSummary}${failureCount > 0 ? "请查看失败任务的错误日志。" : "未保留已取消任务的未完成输出。"}`
+      );
+    }
+  }
+
   return (
     <main className="app-shell">
       <header className="top-bar">
@@ -1922,7 +2211,7 @@ function App() {
               : qpdfAvailable
                 ? "PDF qpdf 工具已启用"
                 : imageEngineAvailable
-                  ? "图片转换与改尺寸已启用"
+                  ? "图片转换、改尺寸与压缩已启用"
                   : "转换未启用"}
           </span>
         </div>
@@ -1952,7 +2241,7 @@ function App() {
           </nav>
           <div className="sidebar-note">
             <strong>本地工具预览</strong>
-            <span>PDF 工具与 JPG、PNG、WebP 图片转换和改尺寸已启用。Office 等其他能力仍未启用。</span>
+            <span>PDF 工具与 JPG、PNG、WebP 图片转换、改尺寸和压缩已启用。Office 等其他能力仍未启用。</span>
           </div>
         </aside>
 
@@ -2143,14 +2432,14 @@ function App() {
             </div>
           </section>
 
-          <section className="image-tools-panel" aria-label="Preview 0.3 图片工具">
+          <section className="image-tools-panel" aria-label="Preview 0.4 图片工具">
             <div className="pdf-tools-header">
               <div>
-                <p className="section-kicker">Preview 0.3 · 本地功能预览</p>
+                <p className="section-kicker">Preview 0.4 · 本地功能预览</p>
                 <h2>图片工具</h2>
                 <p>
                   {imageEngineAvailable
-                    ? "JPG、PNG、WebP 格式转换与等比改尺寸已启用，仅在本机执行。"
+                    ? "JPG、PNG、WebP 格式转换、等比改尺寸与同格式压缩已启用，仅在本机执行。"
                     : "图片引擎不可用，图片操作保持禁用。"}
                 </p>
               </div>
@@ -2291,11 +2580,87 @@ function App() {
                 </button>
               </article>
 
-              <article className="pdf-tool-card image-tool-card">
-                <h3>图片压缩</h3>
-                <p>高清、平衡、小体积等本地压缩预设仍在规划中。</p>
-                <button type="button" disabled>
-                  稍后启用
+              <article className="pdf-tool-card image-tool-card image-compression-card">
+                <h3>图片压缩 <span className="preview-label">Preview 0.4</span></h3>
+                <p>保持源格式。JPEG/WebP 使用质量压缩，PNG 仅做无损优化；结果未变小时不生成新文件。</p>
+                <div className="compression-quality-grid">
+                  <label>
+                    <span>JPEG 质量</span>
+                    <div className="quality-control">
+                      <input
+                        type="range"
+                        min={minCompressionQuality}
+                        max={maxCompressionQuality}
+                        step="1"
+                        value={jpegQualityValidation.value ?? 82}
+                        onChange={(event) =>
+                          setJpegCompressionQuality(event.currentTarget.value)
+                        }
+                        aria-label="JPEG 压缩质量滑块"
+                      />
+                      <input
+                        type="number"
+                        inputMode="numeric"
+                        min={minCompressionQuality}
+                        max={maxCompressionQuality}
+                        step="1"
+                        value={jpegCompressionQuality}
+                        onChange={(event) =>
+                          setJpegCompressionQuality(event.currentTarget.value)
+                        }
+                        aria-label="JPEG 压缩质量"
+                      />
+                    </div>
+                  </label>
+                  <label>
+                    <span>WebP 质量</span>
+                    <div className="quality-control">
+                      <input
+                        type="range"
+                        min={minCompressionQuality}
+                        max={maxCompressionQuality}
+                        step="1"
+                        value={webpQualityValidation.value ?? 80}
+                        onChange={(event) =>
+                          setWebpCompressionQuality(event.currentTarget.value)
+                        }
+                        aria-label="WebP 压缩质量滑块"
+                      />
+                      <input
+                        type="number"
+                        inputMode="numeric"
+                        min={minCompressionQuality}
+                        max={maxCompressionQuality}
+                        step="1"
+                        value={webpCompressionQuality}
+                        onChange={(event) =>
+                          setWebpCompressionQuality(event.currentTarget.value)
+                        }
+                        aria-label="WebP 压缩质量"
+                      />
+                    </div>
+                  </label>
+                </div>
+                <div className="resize-invariants" aria-label="固定压缩规则">
+                  <label><input type="checkbox" checked disabled readOnly />PNG 无损优化</label>
+                  <label><input type="checkbox" checked disabled readOnly />仅结果更小时生成</label>
+                  <label><input type="checkbox" checked disabled readOnly />保持源格式</label>
+                </div>
+                <p
+                  className={
+                    canCompressSelectedImages || selectedTasks.length === 0
+                      ? "resize-guidance"
+                      : "resize-guidance is-error"
+                  }
+                >
+                  {imageCompressionGuidance()}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void compressSelectedImages()}
+                  disabled={!canCompressSelectedImages}
+                >
+                  压缩所选图片
                 </button>
               </article>
 

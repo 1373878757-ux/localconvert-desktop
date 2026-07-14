@@ -428,7 +428,8 @@ h3 {
   background: #ffffff;
 }
 
-.image-resize-card {
+.image-resize-card,
+.image-compression-card {
   grid-column: span 2;
 }
 
@@ -585,6 +586,44 @@ h3 {
 
 .resize-invariants input {
   accent-color: #1f7890;
+}
+
+.compression-quality-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 9px;
+}
+
+.compression-quality-grid > label {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  color: #52606d;
+  font-size: 0.74rem;
+  font-weight: 650;
+}
+
+.quality-control {
+  display: grid;
+  grid-template-columns: minmax(84px, 1fr) 58px;
+  gap: 8px;
+  align-items: center;
+}
+
+.quality-control input[type="range"] {
+  width: 100%;
+  accent-color: #1f7890;
+}
+
+.quality-control input[type="number"] {
+  width: 58px;
+  min-height: 30px;
+  border: 1px solid #c9d2dc;
+  border-radius: 6px;
+  padding: 0 6px;
+  color: #243444;
+  background: #ffffff;
 }
 
 .pdf-tool-card .resize-guidance {
@@ -943,8 +982,13 @@ h3 {
     grid-template-columns: 1fr;
   }
 
-  .image-resize-card {
+  .image-resize-card,
+  .image-compression-card {
     grid-column: span 1;
+  }
+
+  .compression-quality-grid {
+    grid-template-columns: 1fr;
   }
 
   .task-table-head {

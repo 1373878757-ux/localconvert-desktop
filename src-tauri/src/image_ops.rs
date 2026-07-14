@@ -88,7 +88,7 @@ pub fn plan_image_compress(request: ImageCompressRequest) -> Result<ImageOperati
     validate_compression_preset(&request.preset)?;
     let target_format =
         target_format_or_source_default(&request.source, request.output_format.as_deref())?;
-    plan_image_operation("compress", &request.source, &target_format)
+    plan_image_operation_with_output("compress", &request.source, &target_format, true)
 }
 
 #[tauri::command]
@@ -115,7 +115,20 @@ fn plan_image_operation(
     source: &str,
     target_format: &str,
 ) -> Result<ImageOperationPlan, String> {
-    let output = plan_image_output(source, target_format)?;
+    plan_image_operation_with_output(operation, source, target_format, false)
+}
+
+fn plan_image_operation_with_output(
+    operation: &'static str,
+    source: &str,
+    target_format: &str,
+    compressed_name: bool,
+) -> Result<ImageOperationPlan, String> {
+    let output = if compressed_name {
+        plan_compressed_image_output(source, target_format)?
+    } else {
+        plan_image_output(source, target_format)?
+    };
 
     Ok(ImageOperationPlan {
         operation,
@@ -136,6 +149,21 @@ pub(crate) fn plan_image_output(
     source: &str,
     target_format: &str,
 ) -> Result<PlannedImageOutput, String> {
+    plan_image_output_with_suffix(source, target_format, None)
+}
+
+pub(crate) fn plan_compressed_image_output(
+    source: &str,
+    target_format: &str,
+) -> Result<PlannedImageOutput, String> {
+    plan_image_output_with_suffix(source, target_format, Some("compressed"))
+}
+
+fn plan_image_output_with_suffix(
+    source: &str,
+    target_format: &str,
+    stem_suffix: Option<&str>,
+) -> Result<PlannedImageOutput, String> {
     let trimmed_source = source.trim();
     if trimmed_source.is_empty() {
         return Err("Source image path is required.".to_string());
@@ -144,7 +172,11 @@ pub(crate) fn plan_image_output(
     let source_path = Path::new(trimmed_source);
     let source_extension = supported_input_extension(source_path)?;
     let source_display_name = source_display_name(source_path, trimmed_source);
-    let source_base_name = source_base_name(&source_display_name);
+    let mut source_base_name = source_base_name(&source_display_name);
+    if let Some(suffix) = stem_suffix {
+        source_base_name.push(' ');
+        source_base_name.push_str(suffix);
+    }
     let converted_folder_path = converted_folder_for_source(source_path);
     let existing_names = existing_output_names(&converted_folder_path)?;
     let planned_output_filename =
@@ -505,6 +537,7 @@ mod tests {
         .expect("balanced compression should be planned");
         assert_eq!(compressed.operation, "compress");
         assert_eq!(compressed.target_format, "jpg");
+        assert_eq!(compressed.planned_output_filename, "sample compressed.jpg");
 
         assert!(plan_image_compress(ImageCompressRequest {
             source: "sample.jpg".to_string(),

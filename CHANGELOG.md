@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Preview 0.4 - Image Compression Preview
+
+- Aligned application version metadata to `0.4.0` for the Preview 0.4 development line.
+- Added local same-format JPEG, PNG, and WebP compression through the existing first-party Rust `image-engine`.
+- Added JPEG quality 40-95 with default 82, WebP quality 40-95 with default 80, and lossless-only PNG optimization.
+- Added `compressed` output naming, task-owned temporary encoding, cancellation, validation, and atomic no-overwrite publication.
+- Added fail-closed behavior that does not publish a final file when the encoded result is not smaller than its source.
+- Preserved supported EXIF orientation normalization before compression and kept HEIC blocked.
+- Added the maintained Rust `webpx` encoder API with statically linked libwebp 1.6.0 for lossy WebP quality control, with packaged license notices and manifest verification.
+- Kept existing image conversion, image resize, and qpdf PDF operation behavior unchanged.
+
 ### Preview 0.3 - Image Resize Preview
 
 - Aligned application version metadata to `0.3.0` for the Preview 0.3 development line.

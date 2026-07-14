@@ -17,6 +17,10 @@ use std::{
 const IMAGE_CONVERT_TIMEOUT_SECONDS: u64 = 120;
 const MAX_RESIZE_DIMENSION: u32 = 16_384;
 const MAX_RESIZE_PIXELS: u64 = 64_000_000;
+const MIN_COMPRESSION_QUALITY: u8 = 40;
+const MAX_COMPRESSION_QUALITY: u8 = 95;
+const DEFAULT_JPEG_QUALITY: u8 = 82;
+const DEFAULT_WEBP_QUALITY: u8 = 80;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -77,6 +81,39 @@ pub struct ImageResizeResult {
     message: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageCompressExecutionRequest {
+    source: String,
+    quality: Option<u8>,
+}
+
+#[derive(Serialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageCompressResult {
+    success: bool,
+    operation: &'static str,
+    source_path: String,
+    planned_output_path: String,
+    output_path: String,
+    source_format: String,
+    quality: Option<u8>,
+    lossless: bool,
+    published: bool,
+    smaller: bool,
+    source_bytes: u64,
+    encoded_bytes: u64,
+    output_bytes: u64,
+    saved_bytes: u64,
+    width: u32,
+    height: u32,
+    stdout: String,
+    stderr: String,
+    exit_code: Option<i32>,
+    timed_out: bool,
+    message: String,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ResizeMode {
     Fit,
@@ -97,12 +134,36 @@ struct ImageResizeSidecarReport {
     upscaled: bool,
 }
 
+#[derive(Deserialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct ImageCompressionSidecarReport {
+    operation: String,
+    format: String,
+    quality: Option<u8>,
+    lossless: bool,
+    source_width: u32,
+    source_height: u32,
+    output_width: u32,
+    output_height: u32,
+    source_bytes: u64,
+    output_bytes: u64,
+}
+
 struct ResizeFailureContext<'a> {
     source_path: &'a Path,
     output_path: &'a Path,
     source_format: &'a str,
     mode: ResizeMode,
     request: &'a ImageResizeExecutionRequest,
+}
+
+struct CompressionFailureContext<'a> {
+    source_path: &'a Path,
+    planned_output_path: &'a Path,
+    source_format: &'a str,
+    quality: Option<u8>,
+    lossless: bool,
+    source_bytes: u64,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -188,6 +249,51 @@ pub(crate) fn image_resize_task(
             output_height: 0,
             resized: false,
             output_bytes: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: None,
+            timed_out: false,
+            message,
+        });
+    if control.is_cancelled() {
+        result.mark_cancelled();
+    }
+    result
+}
+
+#[cfg(test)]
+pub fn image_compress_file(request: ImageCompressExecutionRequest) -> ImageCompressResult {
+    image_compress_task(request, TaskControl::detached("image-compress"))
+}
+
+pub(crate) fn image_compress_task(
+    request: ImageCompressExecutionRequest,
+    control: TaskControl,
+) -> ImageCompressResult {
+    let source_path = request.source.trim().to_string();
+    let source_format = source_format_from_path(Path::new(&source_path)).unwrap_or_default();
+    let quality = normalize_compression_quality(&source_format, request.quality)
+        .ok()
+        .flatten();
+
+    let mut result =
+        execute_image_compress(&request, &control).unwrap_or_else(|message| ImageCompressResult {
+            success: false,
+            operation: "compress",
+            source_path,
+            planned_output_path: String::new(),
+            output_path: String::new(),
+            source_format: source_format.clone(),
+            quality,
+            lossless: source_format == "png",
+            published: false,
+            smaller: false,
+            source_bytes: 0,
+            encoded_bytes: 0,
+            output_bytes: 0,
+            saved_bytes: 0,
+            width: 0,
+            height: 0,
             stdout: String::new(),
             stderr: String::new(),
             exit_code: None,
@@ -526,6 +632,224 @@ fn execute_image_resize(
     })
 }
 
+fn execute_image_compress(
+    request: &ImageCompressExecutionRequest,
+    control: &TaskControl,
+) -> Result<ImageCompressResult, String> {
+    if control.is_cancelled() {
+        return Err("Image compression task was cancelled before execution.".to_string());
+    }
+
+    let source_path = validate_source_image(&request.source)?;
+    let source_format = source_format_from_path(&source_path)?;
+    let output_extension = resize_output_extension(&source_path)?;
+    let quality = normalize_compression_quality(&source_format, request.quality)?;
+    let lossless = source_format == "png";
+    let source_bytes = fs::metadata(&source_path)
+        .map_err(|error| format!("Unable to inspect source image size: {error}"))?
+        .len();
+
+    let planned_output =
+        image_ops::plan_compressed_image_output(&path_to_string(&source_path), &output_extension)?;
+    let converted_folder = PathBuf::from(&planned_output.planned_converted_folder_path);
+    let output_path = PathBuf::from(&planned_output.planned_output_path);
+    validate_planned_output_location(&source_path, &converted_folder, &output_path)?;
+
+    let image_engine_path =
+        image_engine::resolve_image_engine_sidecar_path(image_engine::current_platform_key())?;
+    let workspace = TaskOutputWorkspace::create(&converted_folder, control.task_id())?;
+    let temp_output = workspace.temp_file(&format!("compressed-output.{output_extension}"))?;
+    let plan = build_image_compress_arguments(&source_path, &temp_output, quality)?;
+    let execution = run_image_engine_command(
+        &image_engine_path,
+        &plan.arguments,
+        Duration::from_secs(IMAGE_CONVERT_TIMEOUT_SECONDS),
+        control,
+    )?;
+    let failure_context = CompressionFailureContext {
+        source_path: &source_path,
+        planned_output_path: &output_path,
+        source_format: &source_format,
+        quality,
+        lossless,
+        source_bytes,
+    };
+
+    if execution.cancelled || control.is_cancelled() {
+        return Ok(compression_failure_result(
+            &failure_context,
+            Some(&execution),
+            false,
+            "Image compression task was cancelled locally.",
+        ));
+    }
+
+    if execution.timed_out {
+        return Ok(compression_failure_result(
+            &failure_context,
+            Some(&execution),
+            true,
+            &format!(
+                "image-engine compression timed out after {IMAGE_CONVERT_TIMEOUT_SECONDS} seconds."
+            ),
+        ));
+    }
+
+    if execution.exit_code != Some(0) {
+        return Ok(compression_failure_result(
+            &failure_context,
+            Some(&execution),
+            false,
+            "image-engine compression failed.",
+        ));
+    }
+
+    let report = match parse_compression_sidecar_report(
+        &execution.stdout,
+        &source_format,
+        quality,
+        source_bytes,
+    ) {
+        Ok(report) => report,
+        Err(message) => {
+            return Ok(compression_failure_result(
+                &failure_context,
+                Some(&execution),
+                false,
+                &message,
+            ));
+        }
+    };
+    let (encoded_bytes, width, height) = match validate_output_image(&temp_output) {
+        Ok(output) => output,
+        Err(message) => {
+            return Ok(compression_failure_result(
+                &failure_context,
+                Some(&execution),
+                false,
+                &message,
+            ));
+        }
+    };
+    if report.output_bytes != encoded_bytes
+        || (report.output_width, report.output_height) != (width, height)
+        || (report.source_width, report.source_height) != (width, height)
+    {
+        return Ok(compression_failure_result(
+            &failure_context,
+            Some(&execution),
+            false,
+            "image-engine compression report does not match the validated output.",
+        ));
+    }
+
+    if encoded_bytes >= source_bytes {
+        return Ok(ImageCompressResult {
+            success: true,
+            operation: "compress",
+            source_path: path_to_string(&source_path),
+            planned_output_path: path_to_string(&output_path),
+            output_path: String::new(),
+            source_format,
+            quality,
+            lossless,
+            published: false,
+            smaller: false,
+            source_bytes,
+            encoded_bytes,
+            output_bytes: 0,
+            saved_bytes: 0,
+            width,
+            height,
+            stdout: execution.stdout,
+            stderr: execution.stderr,
+            exit_code: execution.exit_code,
+            timed_out: false,
+            message: "压缩后未变小，未生成新文件".to_string(),
+        });
+    }
+
+    let finalized =
+        match control.commit_outputs(|| workspace.finalize_file(&temp_output, &output_path)) {
+            Ok(finalized) => finalized,
+            Err(TaskCommitError::Cancelled) => {
+                return Ok(compression_failure_result(
+                    &failure_context,
+                    Some(&execution),
+                    false,
+                    "Image compression task was cancelled before output finalization.",
+                ));
+            }
+            Err(TaskCommitError::Finalize(message)) => {
+                return Ok(compression_failure_result(
+                    &failure_context,
+                    Some(&execution),
+                    false,
+                    &message,
+                ));
+            }
+        };
+
+    Ok(ImageCompressResult {
+        success: true,
+        operation: "compress",
+        source_path: path_to_string(&source_path),
+        planned_output_path: path_to_string(&output_path),
+        output_path: path_to_string(&finalized.path),
+        source_format,
+        quality,
+        lossless,
+        published: true,
+        smaller: true,
+        source_bytes,
+        encoded_bytes,
+        output_bytes: finalized.bytes,
+        saved_bytes: source_bytes - finalized.bytes,
+        width,
+        height,
+        stdout: execution.stdout,
+        stderr: execution.stderr,
+        exit_code: execution.exit_code,
+        timed_out: false,
+        message: "Image compression completed locally with bundled image-engine.".to_string(),
+    })
+}
+
+fn compression_failure_result(
+    context: &CompressionFailureContext<'_>,
+    execution: Option<&ImageEngineExecutionResult>,
+    timed_out: bool,
+    message: &str,
+) -> ImageCompressResult {
+    ImageCompressResult {
+        success: false,
+        operation: "compress",
+        source_path: path_to_string(context.source_path),
+        planned_output_path: path_to_string(context.planned_output_path),
+        output_path: String::new(),
+        source_format: context.source_format.to_string(),
+        quality: context.quality,
+        lossless: context.lossless,
+        published: false,
+        smaller: false,
+        source_bytes: context.source_bytes,
+        encoded_bytes: 0,
+        output_bytes: 0,
+        saved_bytes: 0,
+        width: 0,
+        height: 0,
+        stdout: execution
+            .map(|execution| execution.stdout.clone())
+            .unwrap_or_default(),
+        stderr: execution
+            .map(|execution| execution.stderr.clone())
+            .unwrap_or_default(),
+        exit_code: execution.and_then(|execution| execution.exit_code),
+        timed_out,
+        message: message.to_string(),
+    }
+}
+
 fn resize_failure_result(
     context: &ResizeFailureContext<'_>,
     execution: Option<&ImageEngineExecutionResult>,
@@ -587,6 +911,25 @@ impl ImageResizeResult {
         self.resized = false;
         self.output_bytes = 0;
         self.message = "Image resize task was cancelled locally.".to_string();
+    }
+}
+
+impl ImageCompressResult {
+    pub(crate) fn succeeded(&self) -> bool {
+        self.success
+    }
+
+    pub(crate) fn mark_cancelled(&mut self) {
+        self.success = false;
+        self.output_path.clear();
+        self.published = false;
+        self.smaller = false;
+        self.encoded_bytes = 0;
+        self.output_bytes = 0;
+        self.saved_bytes = 0;
+        self.width = 0;
+        self.height = 0;
+        self.message = "Image compression task was cancelled locally.".to_string();
     }
 }
 
@@ -655,6 +998,38 @@ fn normalize_target_format(target_format: &str) -> Result<String, String> {
             "Target image format .{value} is not enabled. Use jpg, png, or webp."
         )),
     }
+}
+
+fn normalize_compression_quality(
+    source_format: &str,
+    requested_quality: Option<u8>,
+) -> Result<Option<u8>, String> {
+    match source_format {
+        "jpg" => {
+            let quality = requested_quality.unwrap_or(DEFAULT_JPEG_QUALITY);
+            validate_compression_quality(quality)?;
+            Ok(Some(quality))
+        }
+        "webp" => {
+            let quality = requested_quality.unwrap_or(DEFAULT_WEBP_QUALITY);
+            validate_compression_quality(quality)?;
+            Ok(Some(quality))
+        }
+        "png" if requested_quality.is_some() => {
+            Err("PNG optimization is lossless and does not accept a quality value.".to_string())
+        }
+        "png" => Ok(None),
+        _ => Err("Image compression supports only JPG/JPEG, PNG, and WebP.".to_string()),
+    }
+}
+
+fn validate_compression_quality(quality: u8) -> Result<(), String> {
+    if !(MIN_COMPRESSION_QUALITY..=MAX_COMPRESSION_QUALITY).contains(&quality) {
+        return Err(format!(
+            "Image compression quality must be between {MIN_COMPRESSION_QUALITY} and {MAX_COMPRESSION_QUALITY}."
+        ));
+    }
+    Ok(())
 }
 
 impl ResizeMode {
@@ -817,6 +1192,42 @@ fn build_image_resize_arguments(
     })
 }
 
+fn build_image_compress_arguments(
+    source_path: &Path,
+    output_path: &Path,
+    quality: Option<u8>,
+) -> Result<ImageEngineCommandPlan, String> {
+    let source_format = source_format_from_path(source_path)?;
+    let source_extension = resize_output_extension(source_path)?;
+    let quality = normalize_compression_quality(&source_format, quality)?;
+    if output_path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_none_or(|extension| !extension.eq_ignore_ascii_case(&source_extension))
+    {
+        return Err(
+            "Compressed output extension must match the source image extension.".to_string(),
+        );
+    }
+
+    let mut arguments = vec![
+        OsString::from("compress"),
+        OsString::from("--input"),
+        source_path.as_os_str().to_os_string(),
+        OsString::from("--output"),
+        output_path.as_os_str().to_os_string(),
+    ];
+    if let Some(quality) = quality {
+        arguments.push(OsString::from("--quality"));
+        arguments.push(OsString::from(quality.to_string()));
+    }
+
+    Ok(ImageEngineCommandPlan {
+        executable: "image-engine",
+        arguments,
+    })
+}
+
 fn parse_resize_sidecar_report(
     stdout: &str,
     expected_mode: ResizeMode,
@@ -854,6 +1265,40 @@ fn parse_resize_sidecar_report(
             != (report.output_width, report.output_height))
     {
         return Err("image-engine resize report has an inconsistent resized flag.".to_string());
+    }
+
+    Ok(report)
+}
+
+fn parse_compression_sidecar_report(
+    stdout: &str,
+    expected_format: &str,
+    expected_quality: Option<u8>,
+    expected_source_bytes: u64,
+) -> Result<ImageCompressionSidecarReport, String> {
+    let report: ImageCompressionSidecarReport = serde_json::from_str(stdout.trim())
+        .map_err(|error| format!("image-engine compression returned an invalid report: {error}"))?;
+    if report.operation != "compress" || report.format != expected_format {
+        return Err(
+            "image-engine compression report does not match the requested operation.".to_string(),
+        );
+    }
+    if report.quality != expected_quality || report.lossless != (expected_format == "png") {
+        return Err(
+            "image-engine compression report has inconsistent quality settings.".to_string(),
+        );
+    }
+    if report.source_bytes != expected_source_bytes || report.output_bytes == 0 {
+        return Err("image-engine compression report has invalid byte counts.".to_string());
+    }
+    if report.source_width == 0
+        || report.source_height == 0
+        || report.output_width == 0
+        || report.output_height == 0
+        || (report.source_width, report.source_height)
+            != (report.output_width, report.output_height)
+    {
+        return Err("image-engine compression report has invalid dimensions.".to_string());
     }
 
     Ok(report)
@@ -972,7 +1417,13 @@ fn path_to_string(path: &Path) -> String {
 mod tests {
     use super::*;
     use crate::task_registry::{BackendTaskRegistry, BackendTaskStatus};
-    use image::{DynamicImage, ImageFormat, Rgb, RgbImage, Rgba, RgbaImage};
+    use image::{
+        codecs::{
+            jpeg::JpegEncoder,
+            png::{CompressionType as PngCompressionType, FilterType as PngFilterType, PngEncoder},
+        },
+        DynamicImage, ImageFormat, Rgb, RgbImage, Rgba, RgbaImage,
+    };
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_case_dir(name: &str) -> PathBuf {
@@ -1000,6 +1451,68 @@ mod tests {
             .save_with_format(path, format)
             .expect("test image should be written");
         fs::read(path).expect("test image bytes should be readable")
+    }
+
+    fn patterned_image(width: u32, height: u32) -> DynamicImage {
+        let mut image = RgbaImage::new(width, height);
+        for (x, y, pixel) in image.enumerate_pixels_mut() {
+            *pixel = Rgba([
+                ((x * 13 + y * 7) % 256) as u8,
+                ((x * 3 + y * 17) % 256) as u8,
+                ((x * 19 + y * 5) % 256) as u8,
+                255,
+            ]);
+        }
+        DynamicImage::ImageRgba8(image)
+    }
+
+    fn noisy_image(width: u32, height: u32) -> DynamicImage {
+        let mut image = RgbaImage::new(width, height);
+        let mut state = 0x4c4f_4341_u32;
+        for pixel in image.pixels_mut() {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            let red = state as u8;
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let green = (state >> 8) as u8;
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let blue = (state >> 16) as u8;
+            *pixel = Rgba([red, green, blue, 255]);
+        }
+        DynamicImage::ImageRgba8(image)
+    }
+
+    fn create_high_quality_jpeg(path: &Path) -> Vec<u8> {
+        let image = noisy_image(256, 192);
+        let mut encoded = Vec::new();
+        image
+            .write_with_encoder(JpegEncoder::new_with_quality(&mut encoded, 100))
+            .expect("high-quality test JPEG should encode");
+        fs::write(path, &encoded).expect("test JPEG should be written");
+        encoded
+    }
+
+    fn create_lossless_webp(path: &Path) -> Vec<u8> {
+        let image = noisy_image(256, 192);
+        image
+            .save_with_format(path, ImageFormat::WebP)
+            .expect("lossless test WebP should be written");
+        fs::read(path).expect("test WebP bytes should be readable")
+    }
+
+    fn create_png_with_compression(path: &Path, compression: PngCompressionType) -> Vec<u8> {
+        let image = patterned_image(128, 96);
+        let mut encoded = Vec::new();
+        image
+            .write_with_encoder(PngEncoder::new_with_quality(
+                &mut encoded,
+                compression,
+                PngFilterType::Adaptive,
+            ))
+            .expect("test PNG should encode");
+        fs::write(path, &encoded).expect("test PNG should be written");
+        encoded
     }
 
     fn assert_image_format(path: &Path, expected: ImageFormat) {
@@ -1096,6 +1609,50 @@ mod tests {
     }
 
     #[test]
+    fn validates_compression_quality_arguments_and_reports() {
+        assert_eq!(normalize_compression_quality("jpg", None), Ok(Some(82)));
+        assert_eq!(normalize_compression_quality("webp", None), Ok(Some(80)));
+        assert_eq!(normalize_compression_quality("png", None), Ok(None));
+        assert!(normalize_compression_quality("jpg", Some(39)).is_err());
+        assert!(normalize_compression_quality("webp", Some(96)).is_err());
+        assert!(normalize_compression_quality("png", Some(80)).is_err());
+
+        let source = Path::new("/Users/mac/客户 图片/input one.jpeg");
+        let output = Path::new("/Users/mac/客户 图片/converted/input one compressed.jpeg");
+        let plan = build_image_compress_arguments(source, output, Some(82))
+            .expect("compression arguments should be valid");
+        assert_eq!(plan.executable, "image-engine");
+        assert_eq!(
+            plan.arguments,
+            vec![
+                OsString::from("compress"),
+                OsString::from("--input"),
+                source.as_os_str().to_os_string(),
+                OsString::from("--output"),
+                output.as_os_str().to_os_string(),
+                OsString::from("--quality"),
+                OsString::from("82"),
+            ]
+        );
+
+        let report = parse_compression_sidecar_report(
+            r#"{"operation":"compress","format":"jpg","quality":82,"lossless":false,"sourceWidth":400,"sourceHeight":200,"outputWidth":400,"outputHeight":200,"sourceBytes":1000,"outputBytes":700}"#,
+            "jpg",
+            Some(82),
+            1000,
+        )
+        .expect("valid compression report should parse");
+        assert_eq!(report.output_bytes, 700);
+        assert!(parse_compression_sidecar_report(
+            r#"{"operation":"compress","format":"jpg","quality":82,"lossless":false,"sourceWidth":400,"sourceHeight":200,"outputWidth":200,"outputHeight":100,"sourceBytes":1000,"outputBytes":700}"#,
+            "jpg",
+            Some(82),
+            1000,
+        )
+        .is_err());
+    }
+
+    #[test]
     fn rejects_missing_non_image_and_same_format_requests() {
         let missing = image_convert_file(ImageConvertExecutionRequest {
             source: "/missing/source.png".to_string(),
@@ -1153,6 +1710,35 @@ mod tests {
 
         assert!(!result.success);
         assert!(result.message.contains("planned but not enabled"));
+        assert!(!case_dir.join("converted").exists());
+
+        let _ = fs::remove_dir_all(case_dir);
+    }
+
+    #[test]
+    fn rejects_heic_compression_before_creating_output_folder() {
+        let case_dir = temp_case_dir("heic-compression-disabled");
+        fs::create_dir_all(&case_dir).expect("test directory should be created");
+        let source = case_dir.join("手机 照片.heic");
+        fs::write(&source, b"not-decoded").expect("HEIC fixture should be written");
+
+        let result = image_compress_file(ImageCompressExecutionRequest {
+            source: path_to_string(&source),
+            quality: None,
+        });
+
+        assert!(!result.success);
+        assert!(result.message.contains("planned but not enabled"));
+        assert!(!case_dir.join("converted").exists());
+
+        let unsupported = case_dir.join("unsupported.gif");
+        fs::write(&unsupported, b"not-decoded").expect("unsupported fixture should be written");
+        let unsupported_result = image_compress_file(ImageCompressExecutionRequest {
+            source: path_to_string(&unsupported),
+            quality: None,
+        });
+        assert!(!unsupported_result.success);
+        assert!(unsupported_result.message.contains("must use a .jpg"));
         assert!(!case_dir.join("converted").exists());
 
         let _ = fs::remove_dir_all(case_dir);
@@ -1221,6 +1807,41 @@ mod tests {
         assert!(result.message.contains("cancelled locally"));
         assert_eq!(
             registry.status("resize-cancel-before-start"),
+            Ok(BackendTaskStatus::Cancelled)
+        );
+        assert!(!case_dir.join("converted").exists());
+
+        let _ = fs::remove_dir_all(case_dir);
+    }
+
+    #[test]
+    fn cancelled_compression_task_does_not_publish_or_create_output_folder() {
+        let case_dir = temp_case_dir("compression-cancel-before-start");
+        fs::create_dir_all(&case_dir).expect("test directory should be created");
+        let source = case_dir.join("cancel compression.jpg");
+        create_high_quality_jpeg(&source);
+
+        let registry = BackendTaskRegistry::default();
+        let control = registry
+            .register("compression-cancel-before-start", "image-compress")
+            .expect("compression task should register");
+        registry
+            .cancel("compression-cancel-before-start")
+            .expect("compression task should cancel");
+
+        let result = image_compress_task(
+            ImageCompressExecutionRequest {
+                source: path_to_string(&source),
+                quality: Some(82),
+            },
+            control,
+        );
+
+        assert!(!result.success);
+        assert!(!result.published);
+        assert!(result.message.contains("cancelled locally"));
+        assert_eq!(
+            registry.status("compression-cancel-before-start"),
             Ok(BackendTaskStatus::Cancelled)
         );
         assert!(!case_dir.join("converted").exists());
@@ -1448,6 +2069,122 @@ mod tests {
             fs::read(&source).expect("source should remain readable"),
             source_before
         );
+
+        let _ = fs::remove_dir_all(case_dir);
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[test]
+    fn bundled_sidecar_compresses_jpeg_without_overwrite_or_source_changes() {
+        let case_dir = temp_case_dir("compress-jpeg-collision").join("客户 文件 with spaces");
+        let converted_dir = case_dir.join("converted");
+        fs::create_dir_all(&converted_dir).expect("converted directory should be created");
+        let source = case_dir.join("报告 照片.jpg");
+        let source_before = create_high_quality_jpeg(&source);
+        let existing_output = converted_dir.join("报告 照片 compressed.jpg");
+        fs::write(&existing_output, b"existing-user-output")
+            .expect("existing output should be written");
+
+        let result = image_compress_file(ImageCompressExecutionRequest {
+            source: path_to_string(&source),
+            quality: Some(60),
+        });
+
+        assert!(result.success, "{}\n{}", result.message, result.stderr);
+        assert!(result.published);
+        assert!(result.smaller);
+        assert_eq!(result.source_format, "jpg");
+        assert_eq!(result.quality, Some(60));
+        assert!(result.output_bytes < result.source_bytes);
+        assert_eq!(
+            PathBuf::from(&result.output_path),
+            converted_dir.join("报告 照片 compressed (1).jpg")
+        );
+        assert_image_format(Path::new(&result.output_path), ImageFormat::Jpeg);
+        assert_eq!(fs::read(&existing_output).unwrap(), b"existing-user-output");
+        assert_eq!(fs::read(&source).unwrap(), source_before);
+
+        let _ = fs::remove_dir_all(
+            case_dir
+                .parent()
+                .expect("smoke directory should have a cleanup parent"),
+        );
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[test]
+    fn bundled_sidecar_compresses_webp_and_png_in_their_source_formats() {
+        let case_dir = temp_case_dir("compress-webp-png");
+        fs::create_dir_all(&case_dir).expect("test directory should be created");
+
+        let webp_source = case_dir.join("网页 图片.webp");
+        let webp_before = create_lossless_webp(&webp_source);
+        let webp_result = image_compress_file(ImageCompressExecutionRequest {
+            source: path_to_string(&webp_source),
+            quality: Some(60),
+        });
+        assert!(
+            webp_result.success && webp_result.published,
+            "{}\n{}",
+            webp_result.message,
+            webp_result.stderr
+        );
+        assert!(webp_result.output_bytes < webp_result.source_bytes);
+        assert_image_format(Path::new(&webp_result.output_path), ImageFormat::WebP);
+        assert_eq!(fs::read(&webp_source).unwrap(), webp_before);
+
+        let png_source = case_dir.join("无损 图片.png");
+        let png_before = create_png_with_compression(&png_source, PngCompressionType::Uncompressed);
+        let png_result = image_compress_file(ImageCompressExecutionRequest {
+            source: path_to_string(&png_source),
+            quality: None,
+        });
+        assert!(
+            png_result.success && png_result.published,
+            "{}\n{}",
+            png_result.message,
+            png_result.stderr
+        );
+        assert!(png_result.lossless);
+        assert_eq!(png_result.quality, None);
+        assert!(png_result.output_bytes < png_result.source_bytes);
+        assert_image_format(Path::new(&png_result.output_path), ImageFormat::Png);
+        assert_eq!(fs::read(&png_source).unwrap(), png_before);
+
+        let _ = fs::remove_dir_all(case_dir);
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[test]
+    fn bundled_sidecar_does_not_publish_png_when_optimization_is_not_smaller() {
+        let case_dir = temp_case_dir("compress-not-smaller");
+        fs::create_dir_all(&case_dir).expect("test directory should be created");
+        let source = case_dir.join("already optimized.png");
+        let source_before = create_png_with_compression(&source, PngCompressionType::Best);
+
+        let result = image_compress_file(ImageCompressExecutionRequest {
+            source: path_to_string(&source),
+            quality: None,
+        });
+
+        assert!(result.success, "{}\n{}", result.message, result.stderr);
+        assert!(!result.published);
+        assert!(!result.smaller);
+        assert!(result.output_path.is_empty());
+        assert_eq!(result.message, "压缩后未变小，未生成新文件");
+        assert_eq!(fs::read(&source).unwrap(), source_before);
+        assert!(!Path::new(&result.planned_output_path).exists());
+        let task_workspaces = fs::read_dir(case_dir.join("converted"))
+            .expect("converted folder should be readable")
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".localconvert-task-")
+            })
+            .count();
+        assert_eq!(task_workspaces, 0);
 
         let _ = fs::remove_dir_all(case_dir);
     }

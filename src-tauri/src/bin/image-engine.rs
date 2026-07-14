@@ -1,6 +1,11 @@
 use image::{
-    imageops::FilterType, DynamicImage, GenericImageView, ImageDecoder, ImageFormat, ImageReader,
-    Rgb, RgbImage, Rgba, RgbaImage,
+    codecs::{
+        jpeg::JpegEncoder,
+        png::{CompressionType as PngCompressionType, FilterType as PngFilterType, PngEncoder},
+    },
+    imageops::FilterType as ResizeFilterType,
+    DynamicImage, GenericImageView, ImageDecoder, ImageFormat, ImageReader, Rgb, RgbImage, Rgba,
+    RgbaImage,
 };
 use serde::Serialize;
 use std::{
@@ -10,10 +15,14 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const IMAGE_ENGINE_VERSION: &str = "0.3.0-preview.0";
+const IMAGE_ENGINE_VERSION: &str = "0.4.0-preview.0";
 const SELF_CHECK_MESSAGE: &str = "LocalConvert image-engine self-check ok";
 const MAX_RESIZE_DIMENSION: u32 = 16_384;
 const MAX_RESIZE_PIXELS: u64 = 64_000_000;
+const MIN_COMPRESSION_QUALITY: u8 = 40;
+const MAX_COMPRESSION_QUALITY: u8 = 95;
+const DEFAULT_JPEG_QUALITY: u8 = 82;
+const DEFAULT_WEBP_QUALITY: u8 = 80;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TargetFormat {
@@ -45,6 +54,13 @@ struct ResizeOptions {
     max_height: Option<u32>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct CompressOptions {
+    input: PathBuf,
+    output: PathBuf,
+    quality: Option<u8>,
+}
+
 #[derive(Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct ResizeReport {
@@ -58,12 +74,28 @@ struct ResizeReport {
     upscaled: bool,
 }
 
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct CompressionReport {
+    operation: &'static str,
+    format: &'static str,
+    quality: Option<u8>,
+    lossless: bool,
+    source_width: u32,
+    source_height: u32,
+    output_width: u32,
+    output_height: u32,
+    source_bytes: u64,
+    output_bytes: u64,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum CliCommand {
     Version,
     SelfCheck,
     Convert(ConvertOptions),
     Resize(ResizeOptions),
+    Compress(CompressOptions),
 }
 
 fn main() {
@@ -99,6 +131,11 @@ where
             serde_json::to_string(&report)
                 .map_err(|error| format!("Unable to serialize resize result: {error}"))
         }
+        CliCommand::Compress(options) => {
+            let report = compress_image(&options)?;
+            serde_json::to_string(&report)
+                .map_err(|error| format!("Unable to serialize compression result: {error}"))
+        }
     }
 }
 
@@ -122,8 +159,79 @@ where
         }
         Some("convert") => parse_convert_args(args).map(CliCommand::Convert),
         Some("resize") => parse_resize_args(args).map(CliCommand::Resize),
+        Some("compress") => parse_compress_args(args).map(CliCommand::Compress),
         _ => Err(usage_error("Unsupported image-engine command.")),
     }
+}
+
+fn parse_compress_args<I>(args: I) -> Result<CompressOptions, String>
+where
+    I: IntoIterator<Item = OsString>,
+{
+    let mut args = args.into_iter();
+    let mut input = None;
+    let mut output = None;
+    let mut quality = None;
+
+    while let Some(flag) = args.next() {
+        let value = args.next().ok_or_else(|| {
+            usage_error(&format!("Missing value for {}.", flag.to_string_lossy()))
+        })?;
+
+        match flag.to_str() {
+            Some("--input") if input.is_none() => input = Some(PathBuf::from(value)),
+            Some("--output") if output.is_none() => output = Some(PathBuf::from(value)),
+            Some("--quality") if quality.is_none() => {
+                quality = Some(parse_compression_quality(&value)?)
+            }
+            Some("--input" | "--output" | "--quality") => {
+                return Err(usage_error(&format!(
+                    "Duplicate option: {}.",
+                    flag.to_string_lossy()
+                )))
+            }
+            _ => {
+                return Err(usage_error(&format!(
+                    "Unsupported option: {}.",
+                    flag.to_string_lossy()
+                )))
+            }
+        }
+    }
+
+    Ok(CompressOptions {
+        input: input.ok_or_else(|| usage_error("--input is required."))?,
+        output: output.ok_or_else(|| usage_error("--output is required."))?,
+        quality,
+    })
+}
+
+fn parse_compression_quality(value: &OsStr) -> Result<u8, String> {
+    let value = value
+        .to_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| compression_quality_error("Compression quality is required."))?;
+    let quality = value
+        .parse::<u8>()
+        .map_err(|_| compression_quality_error("Compression quality must be a whole number."))?;
+    validate_compression_quality(quality)?;
+    Ok(quality)
+}
+
+fn validate_compression_quality(quality: u8) -> Result<(), String> {
+    if !(MIN_COMPRESSION_QUALITY..=MAX_COMPRESSION_QUALITY).contains(&quality) {
+        return Err(compression_quality_error(
+            "Compression quality is outside the supported range.",
+        ));
+    }
+    Ok(())
+}
+
+fn compression_quality_error(message: &str) -> String {
+    format!(
+        "{message} Use a value from {MIN_COMPRESSION_QUALITY} through {MAX_COMPRESSION_QUALITY}."
+    )
 }
 
 fn parse_resize_args<I>(args: I) -> Result<ResizeOptions, String>
@@ -300,7 +408,7 @@ where
 
 fn usage_error(message: &str) -> String {
     format!(
-        "{message} Usage: image-engine --version | --self-check | convert --input <path> --output <path> --format <jpg|png|webp> | resize --input <path> --output <path> --mode <fit|width|height> [--max-width <pixels>] [--max-height <pixels>]"
+        "{message} Usage: image-engine --version | --self-check | convert --input <path> --output <path> --format <jpg|png|webp> | resize --input <path> --output <path> --mode <fit|width|height> [--max-width <pixels>] [--max-height <pixels>] | compress --input <path> --output <path> [--quality <40-95>]"
     )
 }
 
@@ -391,7 +499,7 @@ fn resize_image(options: &ResizeOptions) -> Result<ResizeReport, String> {
     )?;
     let resized = (output_width, output_height) != (source_width, source_height);
     let output_image = if resized {
-        image.resize_exact(output_width, output_height, FilterType::Lanczos3)
+        image.resize_exact(output_width, output_height, ResizeFilterType::Lanczos3)
     } else {
         image
     };
@@ -408,6 +516,58 @@ fn resize_image(options: &ResizeOptions) -> Result<ResizeReport, String> {
         resized,
         upscaled: false,
     })
+}
+
+fn compress_image(options: &CompressOptions) -> Result<CompressionReport, String> {
+    let source_format = source_format(&options.input)?;
+    let quality = compression_quality_for_format(source_format, options.quality)?;
+    validate_input_file(&options.input)?;
+    validate_output_path(&options.output, source_format)?;
+
+    let source_bytes = fs::metadata(&options.input)
+        .map_err(|error| format!("Unable to inspect input image size: {error}"))?
+        .len();
+    let image = decode_oriented_image(&options.input, source_format)?;
+    let (source_width, source_height) = image.dimensions();
+    write_compressed_image_create_new(&image, &options.output, source_format, quality)?;
+    let output_bytes = fs::metadata(&options.output)
+        .map_err(|error| format!("Unable to inspect compressed image size: {error}"))?
+        .len();
+
+    Ok(CompressionReport {
+        operation: "compress",
+        format: source_format.extension(),
+        quality,
+        lossless: source_format == TargetFormat::Png,
+        source_width,
+        source_height,
+        output_width: source_width,
+        output_height: source_height,
+        source_bytes,
+        output_bytes,
+    })
+}
+
+fn compression_quality_for_format(
+    source_format: TargetFormat,
+    requested_quality: Option<u8>,
+) -> Result<Option<u8>, String> {
+    match source_format {
+        TargetFormat::Jpeg => {
+            let quality = requested_quality.unwrap_or(DEFAULT_JPEG_QUALITY);
+            validate_compression_quality(quality)?;
+            Ok(Some(quality))
+        }
+        TargetFormat::WebP => {
+            let quality = requested_quality.unwrap_or(DEFAULT_WEBP_QUALITY);
+            validate_compression_quality(quality)?;
+            Ok(Some(quality))
+        }
+        TargetFormat::Png if requested_quality.is_some() => {
+            Err("PNG optimization is lossless and does not accept --quality.".to_string())
+        }
+        TargetFormat::Png => Ok(None),
+    }
 }
 
 fn validate_input_file(input: &Path) -> Result<(), String> {
@@ -596,6 +756,55 @@ fn write_image_create_new(
     Ok(())
 }
 
+fn write_compressed_image_create_new(
+    image: &DynamicImage,
+    output: &Path,
+    source_format: TargetFormat,
+    quality: Option<u8>,
+) -> Result<(), String> {
+    let output_file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(output)
+        .map_err(|error| format!("Unable to create compressed image: {error}"))?;
+    let mut writer = BufWriter::new(output_file);
+
+    match source_format {
+        TargetFormat::Jpeg => {
+            let quality = quality.expect("validated JPEG quality");
+            let flattened = flatten_onto_white(image);
+            flattened
+                .write_with_encoder(JpegEncoder::new_with_quality(&mut writer, quality))
+                .map_err(|error| format!("Unable to encode compressed JPEG: {error}"))?;
+        }
+        TargetFormat::Png => {
+            image
+                .write_with_encoder(PngEncoder::new_with_quality(
+                    &mut writer,
+                    PngCompressionType::Best,
+                    PngFilterType::Adaptive,
+                ))
+                .map_err(|error| format!("Unable to optimize PNG losslessly: {error}"))?;
+        }
+        TargetFormat::WebP => {
+            let quality = quality.expect("validated WebP quality");
+            let rgba = image.to_rgba8();
+            let encoded = webpx::Encoder::new_rgba(rgba.as_raw(), rgba.width(), rgba.height())
+                .quality(f32::from(quality))
+                .encode_owned(webpx::Unstoppable)
+                .map_err(|error| format!("Unable to encode compressed WebP: {error}"))?;
+            writer
+                .write_all(&encoded)
+                .map_err(|error| format!("Unable to write compressed WebP: {error}"))?;
+        }
+    }
+
+    writer
+        .flush()
+        .map_err(|error| format!("Unable to finish compressed image: {error}"))?;
+    Ok(())
+}
+
 fn write_image<W>(
     image: &DynamicImage,
     writer: &mut W,
@@ -661,6 +870,17 @@ fn run_codec_self_check() -> Result<(), String> {
                 target_format.extension()
             ));
         }
+    }
+
+    let rgba = sample.to_rgba8();
+    let lossy_webp = webpx::Encoder::new_rgba(rgba.as_raw(), rgba.width(), rgba.height())
+        .quality(f32::from(DEFAULT_WEBP_QUALITY))
+        .encode_owned(webpx::Unstoppable)
+        .map_err(|error| format!("lossy WebP codec self-check encode failed: {error}"))?;
+    let decoded = image::load_from_memory_with_format(&lossy_webp, ImageFormat::WebP)
+        .map_err(|error| format!("lossy WebP codec self-check decode failed: {error}"))?;
+    if decoded.dimensions() != (2, 2) {
+        return Err("lossy WebP codec self-check returned unexpected dimensions.".to_string());
     }
 
     Ok(())
@@ -890,6 +1110,42 @@ mod tests {
                 max_height: Some(1200),
             })
         );
+    }
+
+    #[test]
+    fn parses_compress_arguments_and_validates_quality() {
+        let command = parse_cli_args([
+            OsString::from("compress"),
+            OsString::from("--input"),
+            OsString::from("/Users/mac/客户 图片/input one.webp"),
+            OsString::from("--output"),
+            OsString::from("/Users/mac/客户 图片/converted/input one compressed.webp"),
+            OsString::from("--quality"),
+            OsString::from("80"),
+        ])
+        .expect("compression arguments should parse");
+
+        assert_eq!(
+            command,
+            CliCommand::Compress(CompressOptions {
+                input: PathBuf::from("/Users/mac/客户 图片/input one.webp"),
+                output: PathBuf::from("/Users/mac/客户 图片/converted/input one compressed.webp"),
+                quality: Some(80),
+            })
+        );
+
+        for value in ["39", "96", "-1", "80.5", "quality"] {
+            let result = parse_cli_args([
+                OsString::from("compress"),
+                OsString::from("--input"),
+                OsString::from("sample.jpg"),
+                OsString::from("--output"),
+                OsString::from("converted/sample compressed.jpg"),
+                OsString::from("--quality"),
+                OsString::from(value),
+            ]);
+            assert!(result.is_err(), "quality {value} should be rejected");
+        }
     }
 
     #[test]
@@ -1230,5 +1486,113 @@ mod tests {
         let flattened = flatten_onto_white(&transparent).to_rgb8();
 
         assert_eq!(flattened.get_pixel(0, 0), &Rgb([255, 255, 255]));
+    }
+
+    #[test]
+    fn compresses_jpeg_and_webp_with_quality_without_modifying_sources() {
+        let case_dir = temp_case_dir("compress-jpeg-webp");
+        let converted_dir = case_dir.join("converted");
+        fs::create_dir_all(&converted_dir).expect("converted directory should be created");
+
+        for (format, extension, quality) in [
+            (ImageFormat::Jpeg, "jpg", DEFAULT_JPEG_QUALITY),
+            (ImageFormat::WebP, "webp", DEFAULT_WEBP_QUALITY),
+        ] {
+            let source = case_dir.join(format!("客户 图片 source.{extension}"));
+            let output = converted_dir.join(format!("客户 图片 compressed.{extension}"));
+            let source_before = write_test_image(&source, 64, 48, format);
+
+            let report = compress_image(&CompressOptions {
+                input: source.clone(),
+                output: output.clone(),
+                quality: Some(quality),
+            })
+            .expect("quality compression should succeed");
+
+            assert_eq!(report.quality, Some(quality));
+            assert!(!report.lossless);
+            assert_eq!((report.output_width, report.output_height), (64, 48));
+            assert!(report.output_bytes > 0);
+            assert_eq!(
+                image::open(&output)
+                    .expect("compressed output should decode")
+                    .dimensions(),
+                (64, 48)
+            );
+            assert_eq!(
+                fs::read(&source).expect("source should remain readable"),
+                source_before
+            );
+        }
+
+        let _ = fs::remove_dir_all(case_dir);
+    }
+
+    #[test]
+    fn optimizes_png_losslessly_and_preserves_pixels() {
+        let case_dir = temp_case_dir("compress-png-lossless");
+        let converted_dir = case_dir.join("converted");
+        fs::create_dir_all(&converted_dir).expect("converted directory should be created");
+        let source = case_dir.join("lossless source.png");
+        let output = converted_dir.join("lossless source compressed.png");
+        let source_before = write_test_image(&source, 31, 27, ImageFormat::Png);
+        let source_pixels = image::open(&source)
+            .expect("source PNG should decode")
+            .to_rgba8();
+
+        let report = compress_image(&CompressOptions {
+            input: source.clone(),
+            output: output.clone(),
+            quality: None,
+        })
+        .expect("lossless PNG optimization should succeed");
+
+        assert!(report.lossless);
+        assert_eq!(report.quality, None);
+        assert_eq!(
+            image::open(&output)
+                .expect("optimized PNG should decode")
+                .to_rgba8(),
+            source_pixels
+        );
+        assert_eq!(fs::read(&source).unwrap(), source_before);
+        assert!(compress_image(&CompressOptions {
+            input: source,
+            output: converted_dir.join("invalid-quality.png"),
+            quality: Some(80),
+        })
+        .is_err());
+
+        let _ = fs::remove_dir_all(case_dir);
+    }
+
+    #[test]
+    fn applies_jpeg_orientation_before_compression() {
+        let case_dir = temp_case_dir("compress-oriented-jpeg");
+        let converted_dir = case_dir.join("converted");
+        fs::create_dir_all(&converted_dir).expect("converted directory should be created");
+        let source = case_dir.join("手机 照片.jpg");
+        let output = converted_dir.join("手机 照片 compressed.jpg");
+        write_oriented_jpeg(&source, 6);
+        let source_before = fs::read(&source).expect("source should be readable");
+
+        let report = compress_image(&CompressOptions {
+            input: source.clone(),
+            output: output.clone(),
+            quality: Some(82),
+        })
+        .expect("oriented JPEG compression should succeed");
+
+        assert_eq!((report.output_width, report.output_height), (24, 32));
+        assert_eq!(
+            image::open(&output)
+                .expect("compressed JPEG should decode")
+                .dimensions(),
+            (24, 32)
+        );
+        assert_eq!(read_orientation(&output), Orientation::NoTransforms);
+        assert_eq!(fs::read(&source).unwrap(), source_before);
+
+        let _ = fs::remove_dir_all(case_dir);
     }
 }

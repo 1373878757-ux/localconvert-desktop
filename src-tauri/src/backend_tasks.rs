@@ -1,7 +1,7 @@
 use crate::{
     image_convert::{
-        self, ImageConvertExecutionRequest, ImageConvertResult, ImageResizeExecutionRequest,
-        ImageResizeResult,
+        self, ImageCompressExecutionRequest, ImageCompressResult, ImageConvertExecutionRequest,
+        ImageConvertResult, ImageResizeExecutionRequest, ImageResizeResult,
     },
     qpdf::{
         self, QpdfExtractPagesRequest, QpdfExtractResult, QpdfMergeRequest, QpdfMergeResult,
@@ -46,6 +46,7 @@ impl_task_execution_result!(QpdfExtractResult);
 impl_task_execution_result!(QpdfRotateResult);
 impl_task_execution_result!(ImageConvertResult);
 impl_task_execution_result!(ImageResizeResult);
+impl_task_execution_result!(ImageCompressResult);
 
 async fn run_backend_task<T, F>(
     app: tauri::AppHandle,
@@ -157,6 +158,18 @@ pub(crate) async fn image_resize_file(
 ) -> Result<BackendTaskResponse<ImageResizeResult>, String> {
     run_backend_task(app, task_id, "image-resize", move |control| {
         image_convert::image_resize_task(request, control)
+    })
+    .await
+}
+
+#[tauri::command]
+pub(crate) async fn image_compress_file(
+    app: tauri::AppHandle,
+    task_id: String,
+    request: ImageCompressExecutionRequest,
+) -> Result<BackendTaskResponse<ImageCompressResult>, String> {
+    run_backend_task(app, task_id, "image-compress", move |control| {
+        image_convert::image_compress_task(request, control)
     })
     .await
 }

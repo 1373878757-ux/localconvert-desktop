@@ -370,6 +370,7 @@ pub fn run() {
             native_intake::inspect_native_paths,
             backend_tasks::image_convert_file,
             backend_tasks::image_resize_file,
+            backend_tasks::image_compress_file,
             image_ops::plan_image_convert,
             image_ops::plan_image_compress,
             image_ops::plan_image_resize,
