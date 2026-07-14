@@ -410,27 +410,27 @@ function App() {
   useEffect(() => {
     async function loadSelfCheck() {
       try {
-        const startup = await invoke<StartupStatus>("startup_status");
-        if (startup.error) {
-          setStartupError(startup.error);
-        }
-        if (startup.selfCheck) {
-          setSelfCheck(startup.selfCheck);
-          return;
-        }
-        if (startup.completed) {
-          setSelfCheck(fallbackSelfCheck);
-          return;
-        }
-      } catch {
-        // Fall back to the direct command for development builds that predate startup status.
-      }
+        for (let attempt = 0; attempt < 240; attempt += 1) {
+          const startup = await invoke<StartupStatus>("startup_status");
+          if (startup.completed) {
+            if (startup.error) {
+              setStartupError(startup.error);
+            }
+            setSelfCheck(startup.selfCheck ?? fallbackSelfCheck);
+            return;
+          }
 
-      try {
-        setSelfCheck(await invoke<EngineSelfCheck>("engine_self_check"));
+          await new Promise<void>((resolve) => {
+            window.setTimeout(resolve, 50);
+          });
+        }
+
+        setSelfCheck(fallbackSelfCheck);
+        setStartupError("等待启动引擎自检完成超时。");
+        return;
       } catch {
         setSelfCheck(fallbackSelfCheck);
-        setStartupError("启动状态和引擎自检不可用。");
+        setStartupError("启动状态不可用，未重复运行引擎自检。");
       }
     }
 

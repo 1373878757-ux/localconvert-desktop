@@ -242,7 +242,14 @@ fn image_engine_candidate_paths(
     src_tauri_dir: &Path,
     runtime_dir: Option<&Path>,
 ) -> Vec<PathBuf> {
-    let mut paths = vec![
+    let mut paths = Vec::new();
+
+    if let Some(runtime_dir) = runtime_dir {
+        paths.push(runtime_dir.join(image_engine_prepared_filename(platform)));
+        paths.push(runtime_dir.join(image_engine_raw_filename(platform)));
+    }
+
+    paths.extend([
         src_tauri_dir
             .join("binaries")
             .join(platform)
@@ -251,12 +258,7 @@ fn image_engine_candidate_paths(
             .join("binaries")
             .join(platform)
             .join(image_engine_prepared_filename(platform)),
-    ];
-
-    if let Some(runtime_dir) = runtime_dir {
-        paths.push(runtime_dir.join(image_engine_prepared_filename(platform)));
-        paths.push(runtime_dir.join(image_engine_raw_filename(platform)));
-    }
+    ]);
 
     paths
 }
@@ -339,12 +341,21 @@ mod tests {
         assert_eq!(
             paths,
             vec![
+                PathBuf::from("/app/runtime/image-engine-aarch64-apple-darwin"),
+                PathBuf::from("/app/runtime/image-engine"),
                 PathBuf::from("/workspace/src-tauri/binaries/macos-aarch64/image-engine"),
                 PathBuf::from(
                     "/workspace/src-tauri/binaries/macos-aarch64/image-engine-aarch64-apple-darwin"
                 ),
-                PathBuf::from("/app/runtime/image-engine-aarch64-apple-darwin"),
-                PathBuf::from("/app/runtime/image-engine"),
+            ]
+        );
+        assert_eq!(
+            image_engine_candidate_paths("macos-aarch64", base, None),
+            vec![
+                PathBuf::from("/workspace/src-tauri/binaries/macos-aarch64/image-engine"),
+                PathBuf::from(
+                    "/workspace/src-tauri/binaries/macos-aarch64/image-engine-aarch64-apple-darwin"
+                ),
             ]
         );
         assert_eq!(

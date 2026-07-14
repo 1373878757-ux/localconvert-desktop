@@ -1051,7 +1051,14 @@ fn qpdf_candidate_paths(
     src_tauri_dir: &Path,
     runtime_dir: Option<&Path>,
 ) -> Vec<PathBuf> {
-    let mut paths = vec![
+    let mut paths = Vec::new();
+
+    if let Some(runtime_dir) = runtime_dir {
+        paths.push(runtime_dir.join(qpdf_prepared_filename(platform)));
+        paths.push(runtime_dir.join(qpdf_raw_filename(platform)));
+    }
+
+    paths.extend([
         src_tauri_dir
             .join("binaries")
             .join(platform)
@@ -1060,12 +1067,7 @@ fn qpdf_candidate_paths(
             .join("binaries")
             .join(platform)
             .join(qpdf_prepared_filename(platform)),
-    ];
-
-    if let Some(runtime_dir) = runtime_dir {
-        paths.push(runtime_dir.join(qpdf_prepared_filename(platform)));
-        paths.push(runtime_dir.join(qpdf_raw_filename(platform)));
-    }
+    ]);
 
     paths
 }
@@ -2373,10 +2375,17 @@ mod tests {
         assert_eq!(
             paths,
             vec![
-                PathBuf::from("/app/src-tauri/binaries/macos-aarch64/qpdf"),
-                PathBuf::from("/app/src-tauri/binaries/macos-aarch64/qpdf-aarch64-apple-darwin"),
                 PathBuf::from("/app/runtime/qpdf-aarch64-apple-darwin"),
                 PathBuf::from("/app/runtime/qpdf"),
+                PathBuf::from("/app/src-tauri/binaries/macos-aarch64/qpdf"),
+                PathBuf::from("/app/src-tauri/binaries/macos-aarch64/qpdf-aarch64-apple-darwin"),
+            ]
+        );
+        assert_eq!(
+            qpdf_candidate_paths("macos-aarch64", base, None),
+            vec![
+                PathBuf::from("/app/src-tauri/binaries/macos-aarch64/qpdf"),
+                PathBuf::from("/app/src-tauri/binaries/macos-aarch64/qpdf-aarch64-apple-darwin"),
             ]
         );
     }
