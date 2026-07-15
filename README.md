@@ -4,6 +4,8 @@ by 田宸宇
 
 Slogan: 让可能发生在这儿。
 
+Current development line: **Preview 0.5.1** for macOS Apple Silicon. Preview builds are not yet Developer ID notarized. Download release artifacts only from the [official LocalConvert Desktop GitHub Releases page](https://github.com/1373878757-ux/localconvert-desktop/releases) and verify the published SHA-256 checksum before opening them.
+
 ## Project Overview
 
 LocalConvert Desktop is a desktop-first file conversion app for people who want reliable local conversion without sending files to a cloud service.
@@ -13,6 +15,14 @@ The app is planned as a Tauri v2 desktop application with a React and TypeScript
 This README is the source of truth for the project. Before any code is written or changed, update this document first when the intended product behavior, conversion scope, architecture, privacy model, output rules, or build expectations change.
 
 The first implementation should focus on a dependable v1 conversion set, clear task status, safe output handling, and predictable local execution rather than broad format coverage.
+
+### What This App Does Locally
+
+- Files are processed on the user's Mac by bundled local engines.
+- Source files and outputs are not uploaded.
+- Conversion does not require a hosted server.
+- The app does not include telemetry.
+- Original files are not overwritten; outputs use collision-safe names in a source-adjacent `converted` folder.
 
 ## Product Principles
 
@@ -62,6 +72,14 @@ Preview 0.4 adds local same-format image compression and size optimization for J
 Preview 0.5 adds local metadata and privacy cleanup for JPG/JPEG, PNG, and WebP on macOS Apple Silicon. The first-party engine removes common EXIF, GPS, camera/device, XMP, IPTC, PNG text, and WebP EXIF/XMP container metadata where supported while preserving the source format and visual dimensions. PNG and WebP cleanup, and JPEG cleanup when no orientation transform is required, operate at the container level so encoded pixel payloads are preserved. A JPEG that relies on EXIF orientation is first normalized visually and then re-encoded at JPEG quality 95 before the stale orientation metadata is removed; this necessary JPEG path may change compressed pixel bytes slightly. Cleaned outputs use collision-safe names containing `cleaned`, such as `report cleaned.jpg`. If no removable metadata is found, the backend publishes no final output and reports `未发现可清理的元数据，未生成新文件`. This is a best-effort privacy tool, not forensic-grade sanitization, and users should verify important files before sharing.
 
 A first-party Rust `image-engine` sidecar performs conversion, resizing, compression, and metadata cleanup locally and is enabled only after its startup version and self-check validation pass. Real operations require Tauri-native local paths; browser-only `File` tasks remain metadata previews. Image batches fail closed when any selected item has no native path, uses an unsupported format, has invalid dimensions or quality, is cancelled, or is already running. The Rust backend validates requests, creates the source-adjacent `converted` folder only at execution time, refuses overwrites, launches the sidecar with argument arrays, captures diagnostics, and validates the output before reporting success. JPEG and WebP orientation metadata exposed by the current decoder is applied to pixel data before conversion, resizing, or compression, and stale orientation metadata is not copied to the output. AVIF, TIFF/TIF, HEIC, GIF, and RAW remain disabled for metadata cleanup; images-to-PDF is not enabled yet. The current engine does not decode HEIC or apply HEIC orientation metadata.
+
+### Current Preview Limitations
+
+- The current bundled preview is for macOS Apple Silicon only.
+- Preview artifacts are unsigned or ad-hoc signed and are not yet Developer ID notarized.
+- HEIC conversion, resizing, compression, metadata cleanup, and orientation handling are not enabled.
+- GIF, TIFF, and RAW metadata cleanup are not enabled.
+- Metadata cleanup is best effort and is not forensic-grade sanitization.
 
 ## Platform Matrix
 
@@ -233,7 +251,7 @@ Office rendering can differ from the source application's native output. The v1 
 
 ## Development Setup
 
-This repository includes a Tauri v2, React, and TypeScript desktop app for LocalConvert Desktop. The current Preview 0.5 implementation includes a Simplified Chinese UI, branded startup splash screen, Tauri-native file selection and drag-and-drop intake, a local task queue, backend output path planning, the bundled macOS Apple Silicon qpdf sidecar, startup engine self-checks, real local PDF merge, split, page extraction, and rotate execution, and real local JPG/JPEG, PNG, and WebP conversion, resizing, same-format compression, and best-effort metadata cleanup through the first-party Rust `image-engine` sidecar. Each startup engine smoke check has a three-second timeout; a failed, timed-out, or panicking check is stored as a local startup error and never prevents the main window from opening after the splash minimum display time. Real qpdf and image-engine jobs run through an asynchronous Rust task registry with task-ID status arbitration, child-process cancellation, task-owned temporary outputs, validated atomic no-overwrite publication, and scoped cleanup. Compression outputs are published only when they are smaller than their source, and metadata cleanup outputs are published only when removable metadata is found. Native desktop intake records validated absolute paths and reads filesystem metadata only; browser-only `File` fallback tasks remain metadata previews and cannot run real conversion operations. AVIF, TIFF/TIF, HEIC, GIF, RAW, images-to-PDF, Office conversion, and PDFium rasterization remain disabled until intentionally enabled in later implementation steps.
+This repository includes a Tauri v2, React, and TypeScript desktop app for LocalConvert Desktop. The current Preview 0.5.1 implementation includes a Simplified Chinese UI, branded startup splash screen, Tauri-native file selection and drag-and-drop intake, a local task queue, backend output path planning, the bundled macOS Apple Silicon qpdf sidecar, startup engine self-checks, real local PDF merge, split, page extraction, and rotate execution, and real local JPG/JPEG, PNG, and WebP conversion, resizing, same-format compression, and best-effort metadata cleanup through the first-party Rust `image-engine` sidecar. Each startup engine smoke check has a three-second timeout; a failed, timed-out, or panicking check is stored as a local startup error and never prevents the main window from opening after the splash minimum display time. Real qpdf and image-engine jobs run through an asynchronous Rust task registry with task-ID status arbitration, child-process cancellation, task-owned temporary outputs, validated atomic no-overwrite publication, and scoped cleanup. Compression outputs are published only when they are smaller than their source, and metadata cleanup outputs are published only when removable metadata is found. Native desktop intake records validated absolute paths and reads filesystem metadata only; browser-only `File` fallback tasks remain metadata previews and cannot run real conversion operations. AVIF, TIFF/TIF, HEIC, GIF, RAW, images-to-PDF, Office conversion, and PDFium rasterization remain disabled until intentionally enabled in later implementation steps.
 
 Development machines need the normal Tauri v2 toolchain requirements for the target platform, including Node.js, npm, Rust 1.89 or newer, Cargo, and platform-specific build dependencies. Rust 1.89 is required by the pinned WebP encoder used to build the first-party `image-engine` sidecar.
 
@@ -259,6 +277,23 @@ Build the desktop app with the generic Tauri build command:
 npm run tauri build
 ```
 
+### macOS Preview Install Guide
+
+The current downloadable preview is built for Apple Silicon Macs. It is not yet signed and notarized with an Apple Developer ID, so macOS may show a Gatekeeper warning on first launch.
+
+1. Download the DMG only from the [official GitHub Releases page](https://github.com/1373878757-ux/localconvert-desktop/releases). Do not use DMGs re-hosted by third parties.
+2. Compare the downloaded file with the SHA-256 value printed on that release page:
+
+   ```bash
+   shasum -a 256 "/path/to/LocalConvert Desktop_<version>_aarch64.dmg"
+   ```
+
+3. Stop if the checksum differs or the download source is uncertain. Do not open that file.
+4. Mount the verified DMG and drag `LocalConvert Desktop.app` to Applications.
+5. Try opening the app normally. If Gatekeeper blocks this verified preview because its developer cannot be checked, close the warning, then Control-click the app in Finder, choose **Open**, review the warning, and choose **Open** only for that exact verified app. macOS may instead offer **Open Anyway** under **System Settings > Privacy & Security** after the blocked attempt.
+
+Do not disable Gatekeeper globally, run commands that remove quarantine recursively, or approve an app whose source and checksum have not been verified. Future public builds should follow the detailed [macOS signing and notarization workflow](docs/macos-signing-notarization.md).
+
 Unsigned local development and test builds remain supported. Developer ID signing and Apple notarization are opt-in release steps supplied through the local Keychain and environment variables; no signing credentials belong in this repository. Follow the [macOS signing and notarization workflow](docs/macos-signing-notarization.md) before distributing a macOS DMG outside the Mac App Store.
 
 Packaging should focus on a complete offline installer:
@@ -283,6 +318,15 @@ Packaging should focus on a complete offline installer:
 - Keep installer behavior platform-appropriate for enabled desktop targets.
 
 The packaging process should include a post-install smoke test pass that confirms the app can run supported conversions without network access.
+
+### Future GitHub Prerelease Checklist
+
+1. Confirm the intended version is aligned across npm, Cargo, and Tauri metadata, then build the `.app` and DMG.
+2. Run the agreed smoke-test level for the change; use the heavy review matrix before creating a GitHub Release.
+3. Record the SHA-256 of the exact DMG that passed smoke validation and do not silently replace it with a rebuilt container.
+4. State clearly whether the artifact is Developer ID signed, notarized, and stapled; never imply that an ad-hoc build is notarized.
+5. Create the prerelease from the validated tag and upload only the validated DMG.
+6. Compare the GitHub asset digest and size with the local validated artifact before considering the prerelease complete.
 
 ## Smoke Tests
 

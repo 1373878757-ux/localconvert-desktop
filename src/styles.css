@@ -860,6 +860,21 @@ h3 {
   font-size: 0.8rem;
 }
 
+.inspector-card .about-version {
+  margin-bottom: 6px;
+  color: #273442;
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.inspector-card .about-preview-note {
+  margin-bottom: 0;
+  padding-top: 9px;
+  border-top: 1px solid #e0e5eb;
+  color: #596674;
+  font-size: 0.78rem;
+}
+
 .inspector-card ul {
   margin: 0;
   padding-left: 18px;

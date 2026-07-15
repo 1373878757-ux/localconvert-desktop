@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Preview 0.5.1 - macOS Preview Install Guidance
+
+- Aligned npm, Cargo, and Tauri application version metadata to `0.5.1`.
+- Added a user-facing macOS Apple Silicon preview install guide with official GitHub Release download guidance, SHA-256 verification, and cautious Gatekeeper first-launch steps.
+- Added concise local-processing and current-preview limitation sections without changing conversion behavior.
+- Updated the in-app About panel with version, creator attribution, pure-local processing, unsigned/not-notarized status, and GitHub Release checksum reminders.
+- Clarified low-risk user-facing messages for unsupported HEIC operations, metadata-free cleanup results, and compression results that are not smaller.
+- Added a future GitHub prerelease checklist covering build, smoke-test level, DMG SHA-256, signing/notarization status, and GitHub asset digest comparison.
+- Kept qpdf, image conversion, resize, compression, metadata cleanup, task cancellation, and atomic output behavior unchanged; added no engines or network capability.
+
 ### Preview 0.5 - Image Metadata Privacy Cleanup Preview
 
 - Aligned application version metadata to `0.5.0` for the Preview 0.5 development line.

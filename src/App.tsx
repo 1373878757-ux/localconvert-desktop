@@ -949,7 +949,7 @@ function App() {
     }
 
     if (selectedHeicImageTasks.length > 0) {
-      return `所选任务中有 ${selectedHeicImageTasks.length} 个 HEIC 文件。当前 image-engine 不支持 HEIC 解码或方向处理，不会启动转换。`;
+      return `所选任务中有 ${selectedHeicImageTasks.length} 个 HEIC 文件。当前 Preview 未启用 HEIC 解码、方向处理或格式转换，不会启动任务。`;
     }
 
     if (selectedUnsupportedImageTasks.length > 0) {
@@ -985,7 +985,7 @@ function App() {
     }
 
     if (selectedHeicImageTasks.length > 0) {
-      return `所选任务中有 ${selectedHeicImageTasks.length} 个 HEIC 文件。当前不支持 HEIC 解码、方向处理或改尺寸。`;
+      return `所选任务中有 ${selectedHeicImageTasks.length} 个 HEIC 文件。当前 Preview 未启用 HEIC 解码、方向处理或改尺寸，不会启动任务。`;
     }
 
     if (selectedUnsupportedImageTasks.length > 0) {
@@ -1021,7 +1021,7 @@ function App() {
     }
 
     if (selectedHeicImageTasks.length > 0) {
-      return `所选任务中有 ${selectedHeicImageTasks.length} 个 HEIC 文件。当前不支持 HEIC 解码、方向处理或压缩。`;
+      return `所选任务中有 ${selectedHeicImageTasks.length} 个 HEIC 文件。当前 Preview 未启用 HEIC 解码、方向处理或压缩，不会启动任务。`;
     }
 
     if (selectedUnsupportedImageTasks.length > 0) {
@@ -1059,7 +1059,7 @@ function App() {
       return "请在任务队列中选择 JPG、JPEG、PNG 或 WebP 图片。";
     }
     if (selectedHeicImageTasks.length > 0) {
-      return `所选任务中有 ${selectedHeicImageTasks.length} 个 HEIC 文件。当前不支持 HEIC 元数据或方向处理，不会启动清理。`;
+      return `所选任务中有 ${selectedHeicImageTasks.length} 个 HEIC 文件。当前 Preview 未启用 HEIC 元数据或方向处理，不会启动清理。`;
     }
     if (selectedUnsupportedImageTasks.length > 0) {
       return "所选任务中含有不支持的格式。元数据清理仅启用 JPG/JPEG、PNG 和 WebP。";
@@ -2263,7 +2263,7 @@ function App() {
 
     const notSmallerSummary =
       notSmallerCount > 0
-        ? `压缩后未变小、未生成新文件 ${notSmallerCount} 个：${notSmallerNames.join("、")}。`
+        ? `压缩后未变小，未生成新文件。共 ${notSmallerCount} 个：${notSmallerNames.join("、")}。`
         : "";
     if (failureCount === 0 && cancelledCount === 0) {
       setFolderMessage(
@@ -2395,7 +2395,7 @@ function App() {
 
     const noMetadataSummary =
       noMetadataCount > 0
-        ? `未发现可清理元数据 ${noMetadataCount} 个：${noMetadataNames.join("、")}；未生成新文件。`
+        ? `未发现可清理的元数据，未生成新文件。共 ${noMetadataCount} 个：${noMetadataNames.join("、")}。`
         : "";
     if (failureCount === 0 && cancelledCount === 0) {
       setFolderMessage(
@@ -3011,11 +3011,15 @@ function App() {
         <aside className="inspector" aria-label="检查器">
           <section className="inspector-card">
             <h2>关于</h2>
+            <p className="about-version">LocalConvert Desktop · Preview 0.5.1</p>
             <p>
               <strong>by 田宸宇</strong>
             </p>
             <p className="about-slogan">让可能发生在这儿。</p>
-            <p>纯本地文件转换工具。</p>
+            <p>纯本地处理：不上传、不依赖服务器、不采集遥测。</p>
+            <p className="about-preview-note">
+              macOS Apple Silicon 预览版，尚未完成 Developer ID 签名与 Apple 公证。请仅从官方 GitHub Release 页面下载，并核对发布页 SHA-256。
+            </p>
           </section>
 
           <section className="inspector-card">
