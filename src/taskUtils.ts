@@ -7,6 +7,14 @@ export type TaskStatus =
 
 export type TaskSourceKind = "native-path" | "browser-preview";
 
+export type TaskReportStatus =
+  | "success"
+  | "failed"
+  | "cancelled"
+  | "skipped"
+  | "not_smaller"
+  | "unsupported";
+
 export type NativePathMetadata = {
   sourcePath: string;
   displayName: string;
@@ -28,6 +36,17 @@ export type LocalTask = {
   status: TaskStatus;
   errorLog: string;
   createdAt: number;
+  operationType?: string;
+  startedAt?: number;
+  finishedAt?: number;
+  reportStatus?: TaskReportStatus;
+  reportOutputPath?: string;
+  reportOutputName?: string;
+  reportOutputExtension?: string;
+  reportOutputBytes?: number;
+  reportSavedBytes?: number;
+  reportSavedPercent?: number;
+  reportMessage?: string;
 };
 
 export function getExtension(fileName: string): string {

@@ -875,6 +875,51 @@ h3 {
   font-size: 0.78rem;
 }
 
+.report-format-field {
+  display: grid;
+  gap: 5px;
+  margin-bottom: 9px;
+  color: #4e5a67;
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.report-format-field select {
+  min-height: 30px;
+  border: 1px solid #c9d2dc;
+  border-radius: 6px;
+  padding: 0 8px;
+  color: #243444;
+  background: #ffffff;
+}
+
+.report-export-card > button {
+  width: 100%;
+}
+
+.inspector-card .report-privacy-note {
+  margin: 9px 0 0;
+  color: #6c5a40;
+  font-size: 0.76rem;
+}
+
+.inspector-card .report-export-message,
+.inspector-card .report-export-error {
+  margin: 9px 0 0;
+  border-top: 1px solid #e0e5eb;
+  padding-top: 8px;
+  font-size: 0.76rem;
+  overflow-wrap: anywhere;
+}
+
+.inspector-card .report-export-message {
+  color: #1c6b43;
+}
+
+.inspector-card .report-export-error {
+  color: #8f2a2a;
+}
+
 .inspector-card ul {
   margin: 0;
   padding-left: 18px;

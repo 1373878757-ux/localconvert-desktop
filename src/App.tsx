@@ -8,10 +8,11 @@ import {
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import {
   LocalTask,
   NativePathMetadata,
+  TaskReportStatus,
   TaskStatus,
   createTaskFromFile,
   createTaskFromNativePathMetadata,
@@ -243,10 +244,53 @@ type CompressionQualityValidation = {
   message: string;
 };
 
+type ReportFormat = "csv" | "json";
+
+type TaskReportRecord = {
+  taskId: string;
+  operationType: string;
+  sourcePath: string;
+  sourceName: string;
+  sourceExtension: string;
+  outputPath: string;
+  outputName: string;
+  outputExtension: string;
+  status: TaskReportStatus;
+  startedAt: string | null;
+  finishedAt: string | null;
+  durationMs: number | null;
+  sourceBytes: number | null;
+  outputBytes: number | null;
+  savedBytes: number | null;
+  savedPercent: number | null;
+  message: string;
+};
+
+type ExportTaskReportResult = {
+  success: boolean;
+  destinationPath: string;
+  format: ReportFormat;
+  bytesWritten: number;
+  taskCount: number;
+  message: string;
+};
+
+type TaskReportCompletion = {
+  status: TaskReportStatus;
+  message: string;
+  outputPath?: string;
+  outputName?: string;
+  outputExtension?: string;
+  outputBytes?: number;
+  savedBytes?: number;
+  savedPercent?: number;
+};
+
 const maxResizeDimension = 16_384;
 const maxResizePixels = 64_000_000;
 const minCompressionQuality = 40;
 const maxCompressionQuality = 95;
+const appVersion = "0.6.0";
 
 const fallbackSelfCheck: EngineSelfCheck = {
   platform: "桌面预览",
@@ -312,6 +356,118 @@ function createBackendTaskId(operation: string, taskId: string): string {
   return `${operation}-${taskId}-${Date.now()}-${Math.random()
     .toString(36)
     .slice(2, 8)}`;
+}
+
+function startTaskOperation(
+  task: LocalTask,
+  operationType: string,
+  startedAt: number
+): LocalTask {
+  return {
+    ...task,
+    operationType,
+    startedAt,
+    finishedAt: undefined,
+    reportStatus: undefined,
+    reportOutputPath: undefined,
+    reportOutputName: undefined,
+    reportOutputExtension: undefined,
+    reportOutputBytes: undefined,
+    reportSavedBytes: undefined,
+    reportSavedPercent: undefined,
+    reportMessage: undefined
+  };
+}
+
+function finishTaskOperation(
+  task: LocalTask,
+  completion: TaskReportCompletion,
+  finishedAt: number
+): LocalTask {
+  if (task.reportStatus === "cancelled") {
+    return task;
+  }
+
+  return {
+    ...task,
+    finishedAt,
+    reportStatus: completion.status,
+    reportOutputPath: completion.outputPath,
+    reportOutputName: completion.outputName,
+    reportOutputExtension: completion.outputExtension,
+    reportOutputBytes: completion.outputBytes,
+    reportSavedBytes: completion.savedBytes,
+    reportSavedPercent: completion.savedPercent,
+    reportMessage: completion.message
+  };
+}
+
+function clearTaskReport(task: LocalTask): LocalTask {
+  return {
+    ...task,
+    operationType: undefined,
+    startedAt: undefined,
+    finishedAt: undefined,
+    reportStatus: undefined,
+    reportOutputPath: undefined,
+    reportOutputName: undefined,
+    reportOutputExtension: undefined,
+    reportOutputBytes: undefined,
+    reportSavedBytes: undefined,
+    reportSavedPercent: undefined,
+    reportMessage: undefined
+  };
+}
+
+function fileNameFromPath(path: string): string {
+  const normalized = path.replaceAll("\\", "/");
+  return normalized.split("/").pop() || "";
+}
+
+function buildTaskReportRecord(task: LocalTask): TaskReportRecord | null {
+  if (!task.reportStatus || !task.operationType) {
+    return null;
+  }
+
+  const outputPath = task.reportOutputPath ?? "";
+  const outputName = task.reportOutputName ?? fileNameFromPath(outputPath);
+  const outputExtension =
+    task.reportOutputExtension ?? (outputName ? getExtension(outputName) : "");
+  const durationMs =
+    task.startedAt !== undefined && task.finishedAt !== undefined
+      ? Math.max(0, task.finishedAt - task.startedAt)
+      : null;
+
+  return {
+    taskId: task.taskId,
+    operationType: task.operationType,
+    sourcePath: task.sourcePath ?? "",
+    sourceName: task.displayName,
+    sourceExtension: task.extension === "未知" ? "" : task.extension,
+    outputPath,
+    outputName,
+    outputExtension: outputExtension === "未知" ? "" : outputExtension,
+    status: task.reportStatus,
+    startedAt:
+      task.startedAt === undefined ? null : new Date(task.startedAt).toISOString(),
+    finishedAt:
+      task.finishedAt === undefined
+        ? null
+        : new Date(task.finishedAt).toISOString(),
+    durationMs,
+    sourceBytes: Number.isFinite(task.size) ? task.size : null,
+    outputBytes: task.reportOutputBytes ?? null,
+    savedBytes: task.reportSavedBytes ?? null,
+    savedPercent: task.reportSavedPercent ?? null,
+    message: task.reportMessage ?? task.errorLog
+  };
+}
+
+function reportFilename(format: ReportFormat, now = new Date()): string {
+  const pad = (value: number) => value.toString().padStart(2, "0");
+  const date = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
+  const time = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  return `localconvert-report-${date}-${time}.${format}`;
 }
 
 function parseResizeDimension(value: string, label: string) {
@@ -424,6 +580,10 @@ function App() {
   const [resizeHeight, setResizeHeight] = useState("1080");
   const [jpegCompressionQuality, setJpegCompressionQuality] = useState("82");
   const [webpCompressionQuality, setWebpCompressionQuality] = useState("80");
+  const [reportFormat, setReportFormat] = useState<ReportFormat>("csv");
+  const [reportExporting, setReportExporting] = useState(false);
+  const [reportExportMessage, setReportExportMessage] = useState("");
+  const [reportExportError, setReportExportError] = useState("");
   const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(
     () => new Set()
   );
@@ -481,8 +641,17 @@ function App() {
     [tasks]
   );
 
+  const reportRecords = useMemo(
+    () =>
+      tasks
+        .map(buildTaskReportRecord)
+        .filter((record): record is TaskReportRecord => record !== null),
+    [tasks]
+  );
+
   const selectedTaskWithError = tasks.find((task) => task.errorLog);
   const inspectorErrorLog =
+    (reportExportError ? `报告导出问题:\n${reportExportError}` : "") ||
     selectedTaskWithError?.errorLog ||
     (intakeError ? `文件导入问题:\n${intakeError}` : "") ||
     (startupError ? `启动初始化问题:\n${startupError}` : "");
@@ -1247,6 +1416,61 @@ function App() {
     }
   }
 
+  async function exportTaskReport() {
+    if (reportRecords.length === 0) {
+      setReportExportMessage("");
+      setReportExportError("没有可导出的任务结果。");
+      return;
+    }
+
+    setReportExporting(true);
+    setReportExportMessage("");
+    setReportExportError("");
+    const generatedAt = new Date();
+
+    try {
+      const destinationPath = await save({
+        title: "导出处理报告",
+        defaultPath: reportFilename(reportFormat, generatedAt),
+        filters: [
+          {
+            name: reportFormat === "csv" ? "CSV 报告" : "JSON 报告",
+            extensions: [reportFormat]
+          }
+        ]
+      });
+
+      if (!destinationPath) {
+        setReportExportMessage("已取消导出，未写入报告。任务记录保持不变。");
+        return;
+      }
+
+      const result = await invoke<ExportTaskReportResult>("export_task_report", {
+        request: {
+          destinationPath,
+          format: reportFormat,
+          appVersion,
+          generatedAt: generatedAt.toISOString(),
+          tasks: reportRecords
+        }
+      });
+
+      setReportExportMessage(
+        `${result.message}：${result.destinationPath}（${result.taskCount} 条，${formatBytes(result.bytesWritten)}）`
+      );
+    } catch (error) {
+      const message =
+        typeof error === "string"
+          ? error
+          : error instanceof Error
+            ? error.message
+            : "报告写入失败。";
+      setReportExportError(message);
+    } finally {
+      setReportExporting(false);
+    }
+  }
+
   function handleImageTargetChange(event: ChangeEvent<HTMLSelectElement>) {
     const targetFormat = event.currentTarget.value as EnabledImageFormat;
     setImageTargetFormat(targetFormat);
@@ -1303,12 +1527,12 @@ function App() {
     setTasks((currentTasks) =>
       currentTasks.map((task) =>
         task.taskId === taskId
-          ? {
+          ? clearTaskReport({
               ...task,
               backendTaskId: undefined,
               status: "waiting",
               errorLog: ""
-            }
+            })
           : task
       )
     );
@@ -1322,17 +1546,33 @@ function App() {
 
     if (task.status !== "converting") {
       cancelledTaskIdsRef.current.add(taskId);
+      const finishedAt = Date.now();
       setTasks((currentTasks) =>
-        currentTasks.map((currentTask) =>
-          currentTask.taskId === taskId
-            ? {
-                ...currentTask,
-                backendTaskId: undefined,
-                status: "cancelled",
-                errorLog: ""
-              }
-            : currentTask
-        )
+        currentTasks.map((currentTask) => {
+          if (currentTask.taskId !== taskId) {
+            return currentTask;
+          }
+          const reportTask = currentTask.operationType
+            ? currentTask
+            : startTaskOperation(
+                currentTask,
+                "queue_cancel",
+                currentTask.createdAt
+              );
+          return finishTaskOperation(
+            {
+              ...reportTask,
+              backendTaskId: undefined,
+              status: "cancelled",
+              errorLog: ""
+            },
+            {
+              status: "cancelled",
+              message: "等待任务已在本地取消，未启动任何转换进程。"
+            },
+            finishedAt
+          );
+        })
       );
       setFolderMessage("等待任务已在本地取消，未启动任何转换进程。");
       return;
@@ -1370,22 +1610,27 @@ function App() {
         cancelledTaskIdsRef.current.add(linkedTaskId);
       }
 
+      const cancellationMessage = response.processTerminationRequested
+        ? "任务已取消，正在运行的本地转换进程已终止。"
+        : "任务已取消；后端未发现仍在运行的子进程。";
+      const finishedAt = Date.now();
+
       setTasks((currentTasks) =>
         currentTasks.map((currentTask) =>
           currentTask.backendTaskId === backendTaskId
-            ? {
-                ...currentTask,
-                status: "cancelled",
-                errorLog: ""
-              }
+            ? finishTaskOperation(
+                {
+                  ...currentTask,
+                  status: "cancelled",
+                  errorLog: ""
+                },
+                { status: "cancelled", message: cancellationMessage },
+                finishedAt
+              )
             : currentTask
         )
       );
-      setFolderMessage(
-        response.processTerminationRequested
-          ? "任务已取消，正在运行的本地转换进程已终止。"
-          : "任务已取消；后端未发现仍在运行的子进程。"
-      );
+      setFolderMessage(cancellationMessage);
     } catch (error) {
       const message =
         typeof error === "string"
@@ -1458,11 +1703,12 @@ function App() {
     for (const taskId of taskIds) {
       cancelledTaskIdsRef.current.delete(taskId);
     }
+    const startedAt = Date.now();
     setTasks((currentTasks) =>
       currentTasks.map((task) =>
         taskIds.has(task.taskId)
           ? {
-              ...task,
+              ...startTaskOperation(task, "pdf_merge", startedAt),
               backendTaskId,
               status: "converting",
               errorLog: ""
@@ -1498,6 +1744,7 @@ function App() {
       const result = response.result;
       const resultStatus = backendResponseStatus(response);
       const log = formatMergeLog(result);
+      const finishedAt = Date.now();
 
       setTasks((currentTasks) =>
         currentTasks.map((task) => {
@@ -1507,16 +1754,33 @@ function App() {
 
           const status =
             task.status === "cancelled" ? "cancelled" : resultStatus;
-          return {
-            ...task,
-            backendTaskId: undefined,
-            status,
-            outputPreview:
-              status === "completed"
-                ? result.outputPath || outputPlan.plannedOutputPath
-                : task.outputPreview,
-            errorLog: status === "failed" ? log : ""
-          };
+          const outputPath =
+            status === "completed"
+              ? result.outputPath || outputPlan.plannedOutputPath
+              : "";
+          return finishTaskOperation(
+            {
+              ...task,
+              backendTaskId: undefined,
+              status,
+              outputPreview: outputPath || task.outputPreview,
+              errorLog: status === "failed" ? log : ""
+            },
+            {
+              status:
+                status === "cancelled"
+                  ? "cancelled"
+                  : status === "completed"
+                    ? "success"
+                    : "failed",
+              message: result.message,
+              outputPath,
+              outputName: fileNameFromPath(outputPath),
+              outputExtension: outputPath ? "pdf" : "",
+              outputBytes: result.outputBytes
+            },
+            finishedAt
+          );
         })
       );
       setFolderMessage(
@@ -1533,6 +1797,7 @@ function App() {
           : error instanceof Error
             ? error.message
             : "PDF 合并失败。";
+      const finishedAt = Date.now();
       setTasks((currentTasks) =>
         currentTasks.map((task) => {
           if (!taskIds.has(task.taskId)) {
@@ -1541,12 +1806,16 @@ function App() {
           if (task.status === "cancelled") {
             return { ...task, backendTaskId: undefined };
           }
-          return {
-            ...task,
-            backendTaskId: undefined,
-            status: "failed",
-            errorLog: message
-          };
+          return finishTaskOperation(
+            {
+              ...task,
+              backendTaskId: undefined,
+              status: "failed",
+              errorLog: message
+            },
+            { status: "failed", message },
+            finishedAt
+          );
         })
       );
       setFolderMessage("PDF 合并失败。请查看失败任务的错误日志。");
@@ -1563,11 +1832,12 @@ function App() {
 
     const backendTaskId = createBackendTaskId("qpdf-split", task.taskId);
     cancelledTaskIdsRef.current.delete(task.taskId);
+    const startedAt = Date.now();
     setTasks((currentTasks) =>
       currentTasks.map((currentTask) =>
         currentTask.taskId === task.taskId
           ? {
-              ...currentTask,
+              ...startTaskOperation(currentTask, "pdf_split", startedAt),
               backendTaskId,
               status: "converting",
               errorLog: ""
@@ -1594,6 +1864,7 @@ function App() {
       const outputPreview = result.success
         ? `${result.outputPaths.length} 个文件，位于 ${result.outputDirectory}`
         : task.outputPreview;
+      const finishedAt = Date.now();
 
       setTasks((currentTasks) =>
         currentTasks.map((currentTask) => {
@@ -1603,13 +1874,31 @@ function App() {
 
           const status =
             currentTask.status === "cancelled" ? "cancelled" : resultStatus;
-          return {
-            ...currentTask,
-            backendTaskId: undefined,
-            status,
-            outputPreview: status === "completed" ? outputPreview : currentTask.outputPreview,
-            errorLog: status === "failed" ? log : ""
-          };
+          const outputPaths = status === "completed" ? result.outputPaths : [];
+          return finishTaskOperation(
+            {
+              ...currentTask,
+              backendTaskId: undefined,
+              status,
+              outputPreview:
+                status === "completed" ? outputPreview : currentTask.outputPreview,
+              errorLog: status === "failed" ? log : ""
+            },
+            {
+              status:
+                status === "cancelled"
+                  ? "cancelled"
+                  : status === "completed"
+                    ? "success"
+                    : "failed",
+              message: result.message,
+              outputPath: outputPaths.join(" | "),
+              outputName: outputPaths.map(fileNameFromPath).join(" | "),
+              outputExtension: outputPaths.length > 0 ? "pdf" : "",
+              outputBytes: result.outputBytes
+            },
+            finishedAt
+          );
         })
       );
       setFolderMessage(
@@ -1626,6 +1915,7 @@ function App() {
           : error instanceof Error
             ? error.message
             : "PDF 拆分失败。";
+      const finishedAt = Date.now();
       setTasks((currentTasks) =>
         currentTasks.map((currentTask) => {
           if (currentTask.taskId !== task.taskId) {
@@ -1634,12 +1924,16 @@ function App() {
           if (currentTask.status === "cancelled") {
             return { ...currentTask, backendTaskId: undefined };
           }
-          return {
-            ...currentTask,
-            backendTaskId: undefined,
-            status: "failed",
-            errorLog: message
-          };
+          return finishTaskOperation(
+            {
+              ...currentTask,
+              backendTaskId: undefined,
+              status: "failed",
+              errorLog: message
+            },
+            { status: "failed", message },
+            finishedAt
+          );
         })
       );
       setFolderMessage("PDF 拆分失败。请查看失败任务的错误日志。");
@@ -1662,11 +1956,12 @@ function App() {
 
     const backendTaskId = createBackendTaskId("qpdf-extract", task.taskId);
     cancelledTaskIdsRef.current.delete(task.taskId);
+    const startedAt = Date.now();
     setTasks((currentTasks) =>
       currentTasks.map((currentTask) =>
         currentTask.taskId === task.taskId
           ? {
-              ...currentTask,
+              ...startTaskOperation(currentTask, "pdf_extract_pages", startedAt),
               backendTaskId,
               status: "converting",
               errorLog: ""
@@ -1701,6 +1996,7 @@ function App() {
       const result = response.result;
       const resultStatus = backendResponseStatus(response);
       const log = formatExtractLog(result);
+      const finishedAt = Date.now();
 
       setTasks((currentTasks) =>
         currentTasks.map((currentTask) => {
@@ -1710,14 +2006,30 @@ function App() {
 
           const status =
             currentTask.status === "cancelled" ? "cancelled" : resultStatus;
-          return {
-            ...currentTask,
-            backendTaskId: undefined,
-            status,
-            outputPreview:
-              status === "completed" ? result.outputPath : currentTask.outputPreview,
-            errorLog: status === "failed" ? log : ""
-          };
+          const outputPath = status === "completed" ? result.outputPath : "";
+          return finishTaskOperation(
+            {
+              ...currentTask,
+              backendTaskId: undefined,
+              status,
+              outputPreview: outputPath || currentTask.outputPreview,
+              errorLog: status === "failed" ? log : ""
+            },
+            {
+              status:
+                status === "cancelled"
+                  ? "cancelled"
+                  : status === "completed"
+                    ? "success"
+                    : "failed",
+              message: result.message,
+              outputPath,
+              outputName: fileNameFromPath(outputPath),
+              outputExtension: outputPath ? "pdf" : "",
+              outputBytes: result.outputBytes
+            },
+            finishedAt
+          );
         })
       );
       setFolderMessage(
@@ -1734,6 +2046,7 @@ function App() {
           : error instanceof Error
             ? error.message
             : "PDF 页面提取失败。";
+      const finishedAt = Date.now();
       setTasks((currentTasks) =>
         currentTasks.map((currentTask) => {
           if (currentTask.taskId !== task.taskId) {
@@ -1742,12 +2055,16 @@ function App() {
           if (currentTask.status === "cancelled") {
             return { ...currentTask, backendTaskId: undefined };
           }
-          return {
-            ...currentTask,
-            backendTaskId: undefined,
-            status: "failed",
-            errorLog: message
-          };
+          return finishTaskOperation(
+            {
+              ...currentTask,
+              backendTaskId: undefined,
+              status: "failed",
+              errorLog: message
+            },
+            { status: "failed", message },
+            finishedAt
+          );
         })
       );
       setFolderMessage("PDF 页面提取失败。请查看失败任务的错误日志。");
@@ -1764,11 +2081,12 @@ function App() {
 
     const backendTaskId = createBackendTaskId("qpdf-rotate", task.taskId);
     cancelledTaskIdsRef.current.delete(task.taskId);
+    const startedAt = Date.now();
     setTasks((currentTasks) =>
       currentTasks.map((currentTask) =>
         currentTask.taskId === task.taskId
           ? {
-              ...currentTask,
+              ...startTaskOperation(currentTask, "pdf_rotate", startedAt),
               backendTaskId,
               status: "converting",
               errorLog: ""
@@ -1804,6 +2122,7 @@ function App() {
       const result = response.result;
       const resultStatus = backendResponseStatus(response);
       const log = formatRotateLog(result);
+      const finishedAt = Date.now();
 
       setTasks((currentTasks) =>
         currentTasks.map((currentTask) => {
@@ -1813,14 +2132,30 @@ function App() {
 
           const status =
             currentTask.status === "cancelled" ? "cancelled" : resultStatus;
-          return {
-            ...currentTask,
-            backendTaskId: undefined,
-            status,
-            outputPreview:
-              status === "completed" ? result.outputPath : currentTask.outputPreview,
-            errorLog: status === "failed" ? log : ""
-          };
+          const outputPath = status === "completed" ? result.outputPath : "";
+          return finishTaskOperation(
+            {
+              ...currentTask,
+              backendTaskId: undefined,
+              status,
+              outputPreview: outputPath || currentTask.outputPreview,
+              errorLog: status === "failed" ? log : ""
+            },
+            {
+              status:
+                status === "cancelled"
+                  ? "cancelled"
+                  : status === "completed"
+                    ? "success"
+                    : "failed",
+              message: result.message,
+              outputPath,
+              outputName: fileNameFromPath(outputPath),
+              outputExtension: outputPath ? "pdf" : "",
+              outputBytes: result.outputBytes
+            },
+            finishedAt
+          );
         })
       );
       setFolderMessage(
@@ -1837,6 +2172,7 @@ function App() {
           : error instanceof Error
             ? error.message
             : "PDF 旋转失败。";
+      const finishedAt = Date.now();
       setTasks((currentTasks) =>
         currentTasks.map((currentTask) => {
           if (currentTask.taskId !== task.taskId) {
@@ -1845,12 +2181,16 @@ function App() {
           if (currentTask.status === "cancelled") {
             return { ...currentTask, backendTaskId: undefined };
           }
-          return {
-            ...currentTask,
-            backendTaskId: undefined,
-            status: "failed",
-            errorLog: message
-          };
+          return finishTaskOperation(
+            {
+              ...currentTask,
+              backendTaskId: undefined,
+              status: "failed",
+              errorLog: message
+            },
+            { status: "failed", message },
+            finishedAt
+          );
         })
       );
       setFolderMessage("PDF 旋转失败。请查看失败任务的错误日志。");
@@ -1887,11 +2227,16 @@ function App() {
         task.taskId
       );
       cancelledTaskIdsRef.current.delete(task.taskId);
+      const startedAt = Date.now();
       setTasks((currentTasks) =>
         currentTasks.map((currentTask) =>
           currentTask.taskId === task.taskId
             ? {
-                ...currentTask,
+                ...startTaskOperation(
+                  currentTask,
+                  "image_convert",
+                  startedAt
+                ),
                 backendTaskId,
                 status: "converting",
                 errorLog: ""
@@ -1922,6 +2267,7 @@ function App() {
         } else {
           failureCount += 1;
         }
+        const finishedAt = Date.now();
 
         setTasks((currentTasks) =>
           currentTasks.map((currentTask) => {
@@ -1933,16 +2279,33 @@ function App() {
               currentTask.status === "cancelled"
                 ? "cancelled"
                 : resultStatus;
-            return {
-              ...currentTask,
-              backendTaskId: undefined,
-              status,
-              outputPreview:
-                status === "completed" && result.outputPath
-                  ? result.outputPath
-                  : currentTask.outputPreview,
-              errorLog: status === "failed" ? log : ""
-            };
+            const outputPath =
+              status === "completed" && result.outputPath
+                ? result.outputPath
+                : "";
+            return finishTaskOperation(
+              {
+                ...currentTask,
+                backendTaskId: undefined,
+                status,
+                outputPreview: outputPath || currentTask.outputPreview,
+                errorLog: status === "failed" ? log : ""
+              },
+              {
+                status:
+                  status === "cancelled"
+                    ? "cancelled"
+                    : status === "completed"
+                      ? "success"
+                      : "failed",
+                message: result.message,
+                outputPath,
+                outputName: fileNameFromPath(outputPath),
+                outputExtension: outputPath ? result.targetFormat : "",
+                outputBytes: result.outputBytes
+              },
+              finishedAt
+            );
           })
         );
       } catch (error) {
@@ -1958,23 +2321,28 @@ function App() {
             : error instanceof Error
               ? error.message
               : "图片转换失败。";
+        const finishedAt = Date.now();
         setTasks((currentTasks) =>
-          currentTasks.map((currentTask) =>
-            currentTask.taskId === task.taskId
-              ? {
+          currentTasks.map((currentTask) => {
+            if (currentTask.taskId !== task.taskId) {
+              return currentTask;
+            }
+            const cancelled =
+              currentTask.status === "cancelled" || wasCancelled;
+            return finishTaskOperation(
+              {
                   ...currentTask,
                   backendTaskId: undefined,
-                  status:
-                    currentTask.status === "cancelled" || wasCancelled
-                      ? "cancelled"
-                      : "failed",
-                  errorLog:
-                    currentTask.status === "cancelled" || wasCancelled
-                      ? ""
-                      : message
-                }
-              : currentTask
-          )
+                  status: cancelled ? "cancelled" : "failed",
+                  errorLog: cancelled ? "" : message
+              },
+              {
+                status: cancelled ? "cancelled" : "failed",
+                message: cancelled ? "图片转换已取消。" : message
+              },
+              finishedAt
+            );
+          })
         );
       }
     }
@@ -2024,11 +2392,12 @@ function App() {
       await planBackendOutput(task, task.extension);
       const backendTaskId = createBackendTaskId("image-resize", task.taskId);
       cancelledTaskIdsRef.current.delete(task.taskId);
+      const startedAt = Date.now();
       setTasks((currentTasks) =>
         currentTasks.map((currentTask) =>
           currentTask.taskId === task.taskId
             ? {
-                ...currentTask,
+                ...startTaskOperation(currentTask, "image_resize", startedAt),
                 backendTaskId,
                 status: "converting",
                 errorLog: ""
@@ -2066,6 +2435,7 @@ function App() {
         } else {
           failureCount += 1;
         }
+        const finishedAt = Date.now();
 
         setTasks((currentTasks) =>
           currentTasks.map((currentTask) => {
@@ -2075,16 +2445,33 @@ function App() {
 
             const status =
               currentTask.status === "cancelled" ? "cancelled" : resultStatus;
-            return {
-              ...currentTask,
-              backendTaskId: undefined,
-              status,
-              outputPreview:
-                status === "completed" && result.outputPath
-                  ? result.outputPath
-                  : currentTask.outputPreview,
-              errorLog: status === "failed" ? log : ""
-            };
+            const outputPath =
+              status === "completed" && result.outputPath
+                ? result.outputPath
+                : "";
+            return finishTaskOperation(
+              {
+                ...currentTask,
+                backendTaskId: undefined,
+                status,
+                outputPreview: outputPath || currentTask.outputPreview,
+                errorLog: status === "failed" ? log : ""
+              },
+              {
+                status:
+                  status === "cancelled"
+                    ? "cancelled"
+                    : status === "completed"
+                      ? "success"
+                      : "failed",
+                message: result.message,
+                outputPath,
+                outputName: fileNameFromPath(outputPath),
+                outputExtension: outputPath ? result.sourceFormat : "",
+                outputBytes: result.outputBytes
+              },
+              finishedAt
+            );
           })
         );
       } catch (error) {
@@ -2100,23 +2487,28 @@ function App() {
             : error instanceof Error
               ? error.message
               : "图片改尺寸失败。";
+        const finishedAt = Date.now();
         setTasks((currentTasks) =>
-          currentTasks.map((currentTask) =>
-            currentTask.taskId === task.taskId
-              ? {
+          currentTasks.map((currentTask) => {
+            if (currentTask.taskId !== task.taskId) {
+              return currentTask;
+            }
+            const cancelled =
+              currentTask.status === "cancelled" || wasCancelled;
+            return finishTaskOperation(
+              {
                   ...currentTask,
                   backendTaskId: undefined,
-                  status:
-                    currentTask.status === "cancelled" || wasCancelled
-                      ? "cancelled"
-                      : "failed",
-                  errorLog:
-                    currentTask.status === "cancelled" || wasCancelled
-                      ? ""
-                      : message
-                }
-              : currentTask
-          )
+                  status: cancelled ? "cancelled" : "failed",
+                  errorLog: cancelled ? "" : message
+              },
+              {
+                status: cancelled ? "cancelled" : "failed",
+                message: cancelled ? "图片改尺寸已取消。" : message
+              },
+              finishedAt
+            );
+          })
         );
       }
     }
@@ -2168,11 +2560,16 @@ function App() {
             : undefined;
       const backendTaskId = createBackendTaskId("image-compress", task.taskId);
       cancelledTaskIdsRef.current.delete(task.taskId);
+      const startedAt = Date.now();
       setTasks((currentTasks) =>
         currentTasks.map((currentTask) =>
           currentTask.taskId === task.taskId
             ? {
-                ...currentTask,
+                ...startTaskOperation(
+                  currentTask,
+                  "image_compress",
+                  startedAt
+                ),
                 backendTaskId,
                 status: "converting",
                 errorLog: ""
@@ -2206,6 +2603,7 @@ function App() {
         } else {
           failureCount += 1;
         }
+        const finishedAt = Date.now();
 
         setTasks((currentTasks) =>
           currentTasks.map((currentTask) => {
@@ -2215,16 +2613,43 @@ function App() {
 
             const status =
               currentTask.status === "cancelled" ? "cancelled" : resultStatus;
-            return {
-              ...currentTask,
-              backendTaskId: undefined,
-              status,
-              outputPreview:
-                status === "completed" && result.published && result.outputPath
-                  ? result.outputPath
-                  : currentTask.outputPreview,
-              errorLog: status === "failed" ? log : ""
-            };
+            const outputPath =
+              status === "completed" && result.published && result.outputPath
+                ? result.outputPath
+                : "";
+            const savedPercent =
+              result.sourceBytes > 0 && result.savedBytes > 0
+                ? Number(
+                    ((result.savedBytes / result.sourceBytes) * 100).toFixed(2)
+                  )
+                : 0;
+            return finishTaskOperation(
+              {
+                ...currentTask,
+                backendTaskId: undefined,
+                status,
+                outputPreview: outputPath || currentTask.outputPreview,
+                errorLog: status === "failed" ? log : ""
+              },
+              {
+                status:
+                  status === "cancelled"
+                    ? "cancelled"
+                    : status === "failed"
+                      ? "failed"
+                      : result.published
+                        ? "success"
+                        : "not_smaller",
+                message: result.message,
+                outputPath,
+                outputName: fileNameFromPath(outputPath),
+                outputExtension: outputPath ? result.sourceFormat : "",
+                outputBytes: result.outputBytes,
+                savedBytes: result.savedBytes,
+                savedPercent
+              },
+              finishedAt
+            );
           })
         );
       } catch (error) {
@@ -2240,23 +2665,28 @@ function App() {
             : error instanceof Error
               ? error.message
               : "图片压缩失败。";
+        const finishedAt = Date.now();
         setTasks((currentTasks) =>
-          currentTasks.map((currentTask) =>
-            currentTask.taskId === task.taskId
-              ? {
+          currentTasks.map((currentTask) => {
+            if (currentTask.taskId !== task.taskId) {
+              return currentTask;
+            }
+            const cancelled =
+              currentTask.status === "cancelled" || wasCancelled;
+            return finishTaskOperation(
+              {
                   ...currentTask,
                   backendTaskId: undefined,
-                  status:
-                    currentTask.status === "cancelled" || wasCancelled
-                      ? "cancelled"
-                      : "failed",
-                  errorLog:
-                    currentTask.status === "cancelled" || wasCancelled
-                      ? ""
-                      : message
-                }
-              : currentTask
-          )
+                  status: cancelled ? "cancelled" : "failed",
+                  errorLog: cancelled ? "" : message
+              },
+              {
+                status: cancelled ? "cancelled" : "failed",
+                message: cancelled ? "图片压缩已取消。" : message
+              },
+              finishedAt
+            );
+          })
         );
       }
     }
@@ -2302,11 +2732,16 @@ function App() {
 
       const backendTaskId = createBackendTaskId("image-clean-metadata", task.taskId);
       cancelledTaskIdsRef.current.delete(task.taskId);
+      const startedAt = Date.now();
       setTasks((currentTasks) =>
         currentTasks.map((currentTask) =>
           currentTask.taskId === task.taskId
             ? {
-                ...currentTask,
+                ...startTaskOperation(
+                  currentTask,
+                  "image_metadata_cleanup",
+                  startedAt
+                ),
                 backendTaskId,
                 status: "converting",
                 errorLog: ""
@@ -2337,6 +2772,7 @@ function App() {
         } else {
           failureCount += 1;
         }
+        const finishedAt = Date.now();
 
         setTasks((currentTasks) =>
           currentTasks.map((currentTask) => {
@@ -2345,18 +2781,38 @@ function App() {
             }
             const status =
               currentTask.status === "cancelled" ? "cancelled" : resultStatus;
-            return {
-              ...currentTask,
-              backendTaskId: undefined,
-              status,
-              outputPreview:
-                status === "completed"
-                  ? result.published && result.outputPath
-                    ? result.outputPath
-                    : result.message
-                  : currentTask.outputPreview,
-              errorLog: status === "failed" ? log : ""
-            };
+            const outputPath =
+              status === "completed" && result.published && result.outputPath
+                ? result.outputPath
+                : "";
+            return finishTaskOperation(
+              {
+                ...currentTask,
+                backendTaskId: undefined,
+                status,
+                outputPreview:
+                  status === "completed"
+                    ? outputPath || result.message
+                    : currentTask.outputPreview,
+                errorLog: status === "failed" ? log : ""
+              },
+              {
+                status:
+                  status === "cancelled"
+                    ? "cancelled"
+                    : status === "failed"
+                      ? "failed"
+                      : result.published
+                        ? "success"
+                        : "skipped",
+                message: result.message,
+                outputPath,
+                outputName: fileNameFromPath(outputPath),
+                outputExtension: outputPath ? result.sourceFormat : "",
+                outputBytes: result.outputBytes
+              },
+              finishedAt
+            );
           })
         );
       } catch (error) {
@@ -2372,23 +2828,28 @@ function App() {
             : error instanceof Error
               ? error.message
               : "图片元数据清理失败。";
+        const finishedAt = Date.now();
         setTasks((currentTasks) =>
-          currentTasks.map((currentTask) =>
-            currentTask.taskId === task.taskId
-              ? {
+          currentTasks.map((currentTask) => {
+            if (currentTask.taskId !== task.taskId) {
+              return currentTask;
+            }
+            const cancelled =
+              currentTask.status === "cancelled" || wasCancelled;
+            return finishTaskOperation(
+              {
                   ...currentTask,
                   backendTaskId: undefined,
-                  status:
-                    currentTask.status === "cancelled" || wasCancelled
-                      ? "cancelled"
-                      : "failed",
-                  errorLog:
-                    currentTask.status === "cancelled" || wasCancelled
-                      ? ""
-                      : message
-                }
-              : currentTask
-          )
+                  status: cancelled ? "cancelled" : "failed",
+                  errorLog: cancelled ? "" : message
+              },
+              {
+                status: cancelled ? "cancelled" : "failed",
+                message: cancelled ? "图片元数据清理已取消。" : message
+              },
+              finishedAt
+            );
+          })
         );
       }
     }
@@ -3011,7 +3472,7 @@ function App() {
         <aside className="inspector" aria-label="检查器">
           <section className="inspector-card">
             <h2>关于</h2>
-            <p className="about-version">LocalConvert Desktop · Preview 0.5.1</p>
+            <p className="about-version">LocalConvert Desktop · Preview 0.6.0</p>
             <p>
               <strong>by 田宸宇</strong>
             </p>
@@ -3026,6 +3487,48 @@ function App() {
             <h2>输出规则</h2>
             <p>默认输出到源文件旁边的 converted 文件夹。</p>
             <pre>{outputNameExample.join("\n")}</pre>
+          </section>
+
+          <section className="inspector-card report-export-card">
+            <h2>导出处理报告</h2>
+            <p>
+              可导出 {reportRecords.length} 条任务结果。报告仅包含应用已知的任务元数据，不包含文件内容或原始图片元数据。
+            </p>
+            <label className="report-format-field">
+              <span>报告格式</span>
+              <select
+                aria-label="报告格式"
+                value={reportFormat}
+                onChange={(event) => {
+                  setReportFormat(event.currentTarget.value as ReportFormat);
+                  setReportExportMessage("");
+                  setReportExportError("");
+                }}
+              >
+                <option value="csv">CSV</option>
+                <option value="json">JSON</option>
+              </select>
+            </label>
+            <button
+              type="button"
+              onClick={() => void exportTaskReport()}
+              disabled={reportRecords.length === 0 || reportExporting}
+            >
+              {reportExporting ? "正在导出..." : "导出报告"}
+            </button>
+            <p className="report-privacy-note">
+              隐私提醒：报告可能包含本机文件路径。分享前请先检查；不会导出文件内容、GPS 值或原始 EXIF/XMP/IPTC 数据。
+            </p>
+            {reportExportMessage ? (
+              <p className="report-export-message" role="status">
+                {reportExportMessage}
+              </p>
+            ) : null}
+            {reportExportError ? (
+              <p className="report-export-error" role="alert">
+                {reportExportError}
+              </p>
+            ) : null}
           </section>
 
           <section className="inspector-card">

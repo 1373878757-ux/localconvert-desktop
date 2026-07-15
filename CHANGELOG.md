@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Preview 0.6.0 - Local Task Report Export
+
+- Aligned npm, Cargo, and Tauri application version metadata to `0.6.0`.
+- Added fully local CSV and pretty-printed JSON export for completed task results through the native save dialog.
+- Added task report fields for operation type, local source/output paths, result status, timestamps, duration, available byte counts, savings, and user-facing result summaries.
+- Added explicit report statuses for success, failure, cancellation, skipped metadata cleanup, not-smaller compression, and unsupported results.
+- Added strict Rust-side report schemas and serialization tests, including CSV escaping, stable status names, savings formatting, and rejection of undeclared raw EXIF/GPS/XMP payload fields.
+- Added a compact Chinese report export panel with timestamped filenames, success/cancellation/error feedback, and a warning that exported reports may contain local paths.
+- Added only the minimal `dialog:allow-save` capability; report contents are written by the Rust backend without adding a frontend filesystem plugin.
+- Kept PDF and image operation behavior, bundled engines, cancellation, atomic output publication, and local-only guarantees unchanged.
+
 ### Preview 0.5.1 - macOS Preview Install Guidance
 
 - Aligned npm, Cargo, and Tauri application version metadata to `0.5.1`.

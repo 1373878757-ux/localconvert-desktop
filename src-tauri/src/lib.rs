@@ -17,6 +17,7 @@ mod native_intake;
 mod output_finalize;
 mod qpdf;
 mod task_registry;
+mod task_report;
 mod timed_process;
 
 const DEFAULT_OUTPUT_STRATEGY: &str = "converted-folder-next-to-source";
@@ -380,7 +381,8 @@ pub fn run() {
             backend_tasks::qpdf_split_pdf,
             backend_tasks::qpdf_extract_pages,
             backend_tasks::qpdf_rotate_pages,
-            backend_tasks::cancel_task
+            backend_tasks::cancel_task,
+            task_report::export_task_report
         ])
         .run(tauri::generate_context!())
         .expect("failed to run LocalConvert Desktop");
