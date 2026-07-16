@@ -157,14 +157,25 @@ Preview 0.6.1 当前提供以下能力：
 
 ## Screenshots
 
-真实产品截图**待补充**。当前仓库不提交虚构或占位截图；计划补充以下小尺寸 PNG：
+以下截图来自真实的 Preview 0.6.1 macOS 应用，并使用 `/private/tmp/LocalConvert Demo 0.6.1` 中的合成演示文件；不包含个人文档、用户名或真实图片元数据。
 
-- `docs/assets/screenshots/main-window.png`
-- `docs/assets/screenshots/pdf-tools.png`
-- `docs/assets/screenshots/image-tools.png`
-- `docs/assets/screenshots/report-export.png`
+### Main Workspace
 
-录制或截图建议见 [项目展示文档](docs/showcase.md) 与 [60 秒演示脚本](docs/demo-script.md)。
+![LocalConvert Desktop Preview 0.6.1 主工作台](docs/assets/screenshots/main-window.png)
+
+| PDF tools | Image tools |
+| --- | --- |
+| ![已选择两个合成 PDF 的本地 qpdf 工具](docs/assets/screenshots/pdf-tools.png) | ![JPG、PNG、WebP 图片工具](docs/assets/screenshots/image-tools.png) |
+
+| Task results | Report export |
+| --- | --- |
+| ![使用合成文件生成的本地任务结果](docs/assets/screenshots/task-results.png) | ![CSV 和 JSON 任务报告导出面板](docs/assets/screenshots/report-export.png) |
+
+### About
+
+![Preview 0.6.1、作者与未公证提示](docs/assets/screenshots/about-panel.png)
+
+更多展示说明见 [项目展示文档](docs/showcase.md)，录制流程见 [60 秒演示脚本](docs/demo-script.md)。
 
 ## Platform Matrix
 

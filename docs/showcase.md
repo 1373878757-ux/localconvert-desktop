@@ -82,14 +82,31 @@ flowchart LR
 
 完整节奏见 [60 秒演示脚本](demo-script.md)。
 
-## Screenshot Plan
+## Product Screenshots
 
-真实截图尚未提交，当前不使用虚构占位图。后续只应加入经过实际构建验证、尺寸经过优化的产品截图：
+截图来自真实的 Preview 0.6.1 macOS 应用。演示任务只使用 `/private/tmp/LocalConvert Demo 0.6.1` 中生成的通用 PDF、渐变 JPG 和渐变 PNG，不含个人文件、用户名或真实隐私元数据。
 
-- `docs/assets/screenshots/main-window.png`：主工作台与本地隐私状态。
-- `docs/assets/screenshots/pdf-tools.png`：PDF 工具和任务选择。
-- `docs/assets/screenshots/image-tools.png`：图片转换、改尺寸、压缩和清理面板。
-- `docs/assets/screenshots/report-export.png`：报告格式、隐私提示和最近报告位置。
+### Empty Workspace
+
+![LocalConvert Desktop 空任务工作台](assets/screenshots/main-window.png)
+
+### PDF And Image Tools
+
+| PDF tools | Image tools |
+| --- | --- |
+| ![已选择两个合成 PDF 的 qpdf 工具](assets/screenshots/pdf-tools.png) | ![图片转换、改尺寸、压缩和元数据清理](assets/screenshots/image-tools.png) |
+
+### Results And Reports
+
+| Task results | Report export |
+| --- | --- |
+| ![本地转换完成后的任务结果列表](assets/screenshots/task-results.png) | ![报告格式和隐私提示](assets/screenshots/report-export.png) |
+
+### About And Release Status
+
+![Preview 0.6.1、by 田宸宇 与未公证提示](assets/screenshots/about-panel.png)
+
+所有全窗口截图保持 1308 × 768；About 图仅机械裁切自同一真实窗口，未重绘或生成界面内容。后续替换截图时仍应使用安全合成文件并检查路径、文件内容和桌面背景。
 
 ## Portfolio-Ready Summary
 
