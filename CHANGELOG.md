@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Preview 0.7.0 - Local Preferences And Presets
+
+- Aligned npm, Cargo, Tauri, and in-app version metadata to `0.7.0` while keeping Preview 0.6.1 as the latest published release.
+- Added local-only preferences for the active tool section, image target format, resize mode and values, JPEG/WebP compression quality, report format, and preferences-panel expansion state.
+- Stored preferences in the Tauri application config directory without adding a Store plugin, network capability, recent paths, task history, file contents, raw image metadata, or credentials.
+- Added five built-in Chinese image presets that only prefill existing controls and never select files or start processing automatically.
+- Added safe defaults, corrupt-file fallback, debounced automatic saving, local reset behavior, and non-blocking load/save/reset feedback.
+- Kept qpdf, image conversion, resize, compression, metadata cleanup, report serialization, task cancellation, and atomic output behavior unchanged.
+
 ### Preview 0.6.1 - Task Result Usability
 
 - Aligned npm, Cargo, and Tauri application version metadata to `0.6.1`.

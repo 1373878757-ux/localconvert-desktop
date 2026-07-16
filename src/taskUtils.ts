@@ -15,6 +15,13 @@ export type TaskReportStatus =
   | "not_smaller"
   | "unsupported";
 
+export type BackendTaskStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
 export type NativePathMetadata = {
   sourcePath: string;
   displayName: string;
@@ -57,6 +64,17 @@ export function getExtension(fileName: string): string {
   }
 
   return fileName.slice(dotIndex + 1).toLowerCase();
+}
+
+export function mapBackendTaskStatus(
+  status: BackendTaskStatus,
+  success: boolean
+): TaskStatus {
+  if (status === "cancelled") {
+    return "cancelled";
+  }
+
+  return status === "completed" && success ? "completed" : "failed";
 }
 
 export function getBaseName(fileName: string): string {

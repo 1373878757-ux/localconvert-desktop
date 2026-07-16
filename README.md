@@ -8,6 +8,8 @@
 
 **当前稳定预览： [Preview 0.6.1](https://github.com/1373878757-ux/localconvert-desktop/releases/tag/preview-0.6.1-task-usability-macos)** · macOS Apple Silicon
 
+**当前开发版本：Preview 0.7.0** · 本地偏好设置与常用处理预设；尚未创建发布标签或 Release
+
 [下载与安装](#macos-download-and-install) · [当前功能](#key-features) · [一页作品集简介](docs/portfolio-brief.md) · [项目展示](docs/showcase.md) · [60 秒演示脚本](docs/demo-script.md)
 
 > 当前 DMG 为未签名或 ad-hoc 签名的预览构建，尚未完成 Apple Developer ID 公证。请只从官方 GitHub Releases 页面下载，并在打开前核对 SHA-256。
@@ -50,7 +52,7 @@ LocalConvert Desktop 适合需要处理 PDF 和常见图片、但不希望把文
 
 ## Key Features
 
-Preview 0.6.1 当前提供以下能力：
+Preview 0.7.0 开发版本在 Preview 0.6.1 已发布能力上增加本地偏好与预设：
 
 | 功能 | 当前状态 | 说明 |
 | --- | --- | --- |
@@ -66,8 +68,12 @@ Preview 0.6.1 当前提供以下能力：
 | 打开输出/报告位置 | 可用 | 在 Finder 中定位已发布输出或最近导出的报告。 |
 | 复制错误摘要 | 可用 | 仅复制精简的人类可读错误，不复制原始元数据载荷。 |
 | 清空任务记录 | 可用 | 二次确认后只清空当前界面记录，不删除任何文件。 |
+| 本地偏好设置 | 开发中 | 记住常用工具区、图片参数和报告格式，仅写入 Tauri 应用配置目录。 |
+| 常用处理预设 | 开发中 | 五个内置图片预设只填充已有参数，不会自动处理文件。 |
 
 任务由 Tauri 原生文件选择或拖放导入，真实操作使用本地绝对路径。队列显示等待、处理中、完成、失败和取消状态，并支持安全取消、失败重试、原子输出和防覆盖发布。
+
+偏好设置不会保存任务历史、源文件路径、输出路径、报告路径、文件内容或原始 EXIF/GPS/XMP/IPTC 数据。偏好只保存在本机，不提供云同步或跨设备同步，并可通过“重置偏好设置”恢复安全默认值；重置不会删除任务、源文件、输出文件或报告。
 
 ## Supported Conversions
 
@@ -160,6 +166,7 @@ Preview 0.6.1 当前提供以下能力：
 | 0.5.1 | 完善 macOS 安装、Gatekeeper 与 SHA-256 指引。 |
 | 0.6.0 | 增加 CSV/JSON 批量任务报告导出。 |
 | **0.6.1** | 增加输出/报告定位、精简错误复制、历史清理确认和空状态优化。 |
+| 0.7.0（开发中） | 增加纯本地用户偏好、工具区记忆和只填充参数的常用图片预设。 |
 
 ## Screenshots
 
@@ -268,6 +275,8 @@ LocalConvert Desktop is designed around local file privacy:
 - Real conversion engines must write only into a task-owned temporary directory created inside the final output filesystem; they must never write directly to the user-visible final path.
 - After validation, Rust must publish outputs with atomic no-overwrite semantics. If a final path appears before publication, the task must fail without replacing or deleting that file.
 - Failure and cancellation cleanup must remove only task-owned temporary paths, never an arbitrary final output path.
+- User preferences must remain in the Tauri application config directory and must not contain task history, local file/report paths, file contents, raw image metadata, credentials, or signing material.
+- Resetting preferences must affect only the preferences file and in-memory preference values; it must not delete tasks or user files.
 
 Process execution must follow these rules:
 

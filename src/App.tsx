@@ -10,6 +10,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import {
+  BackendTaskStatus,
   LocalTask,
   NativePathMetadata,
   TaskReportStatus,
@@ -19,8 +20,22 @@ import {
   formatBytes,
   getBaseName,
   getExtension,
-  getOutputName
+  getOutputName,
+  mapBackendTaskStatus
 } from "./taskUtils";
+import {
+  BuiltInPresetId,
+  EnabledImageFormat,
+  ReportFormat,
+  ResizeMode,
+  ToolSection,
+  UserPreferences,
+  applyBuiltInPreset,
+  buildPreferenceSnapshot,
+  builtInPresets,
+  defaultPreferences,
+  isEnabledImageExtension
+} from "./preferences";
 
 type EngineStatus = {
   name: string;
@@ -205,13 +220,6 @@ type ImageCleanMetadataResult = {
   message: string;
 };
 
-type BackendTaskStatus =
-  | "queued"
-  | "running"
-  | "completed"
-  | "failed"
-  | "cancelled";
-
 type BackendTaskResponse<T> = {
   taskId: string;
   operation: string;
@@ -228,9 +236,6 @@ type CancelTaskResponse = {
   message: string;
 };
 
-type EnabledImageFormat = "jpg" | "png" | "webp";
-type ResizeMode = "fit" | "width" | "height";
-
 type ResizeInputValidation = {
   valid: boolean;
   maxWidth?: number;
@@ -243,8 +248,6 @@ type CompressionQualityValidation = {
   value?: number;
   message: string;
 };
-
-type ReportFormat = "csv" | "json";
 
 type TaskReportRecord = {
   taskId: string;
@@ -300,11 +303,22 @@ type TaskReportCompletion = {
   outputLocationPath?: string;
 };
 
+type PreferencesLoadResult = {
+  preferences: UserPreferences;
+  usedDefaults: boolean;
+  warning: string | null;
+};
+
+type PreferencesMutationResult = {
+  preferences: UserPreferences;
+  message: string;
+};
+
 const maxResizeDimension = 16_384;
 const maxResizePixels = 64_000_000;
 const minCompressionQuality = 40;
 const maxCompressionQuality = 95;
-const appVersion = "0.6.1";
+const appVersion = "0.7.0";
 
 const fallbackSelfCheck: EngineSelfCheck = {
   platform: "桌面预览",
@@ -338,8 +352,6 @@ const fallbackSelfCheck: EngineSelfCheck = {
   ]
 };
 
-const enabledImageExtensions = new Set(["jpg", "jpeg", "png", "webp"]);
-
 const statusLabels: Record<TaskStatus, string> = {
   waiting: "等待中",
   converting: "处理中",
@@ -354,16 +366,28 @@ const outputNameExample = [
   getOutputName("report.pdf", ["report.pdf", "report (1).pdf"])
 ];
 
+const toolSectionLabels: Record<ToolSection, string> = {
+  pdf: "PDF 工具",
+  "image-convert": "图片转换",
+  "image-resize": "图片改尺寸",
+  "image-compress": "图片压缩",
+  "metadata-cleanup": "隐私清理",
+  "report-export": "报告导出"
+};
+
+const toolSectionTargets: Record<ToolSection, string> = {
+  pdf: "pdf-tools",
+  "image-convert": "image-convert-tool",
+  "image-resize": "image-resize-tool",
+  "image-compress": "image-compress-tool",
+  "metadata-cleanup": "metadata-cleanup-tool",
+  "report-export": "report-export-tool"
+};
+
 function backendResponseStatus<T extends { success: boolean }>(
   response: BackendTaskResponse<T>
 ): TaskStatus {
-  if (response.status === "cancelled") {
-    return "cancelled";
-  }
-
-  return response.status === "completed" && response.result.success
-    ? "completed"
-    : "failed";
+  return mapBackendTaskStatus(response.status, response.result.success);
 }
 
 function createBackendTaskId(operation: string, taskId: string): string {
@@ -597,7 +621,9 @@ function validateCompressionQuality(
 function App() {
   const [selfCheck, setSelfCheck] = useState<EngineSelfCheck>(fallbackSelfCheck);
   const [tasks, setTasks] = useState<LocalTask[]>([]);
-  const [activeTool, setActiveTool] = useState("PDF 工具");
+  const [activeTool, setActiveTool] = useState<ToolSection>(
+    defaultPreferences.activeTool
+  );
   const [dragActive, setDragActive] = useState(false);
   const [folderMessage, setFolderMessage] = useState("");
   const [intakeMessage, setIntakeMessage] = useState("");
@@ -605,13 +631,32 @@ function App() {
   const [startupError, setStartupError] = useState("");
   const [extractPageRange, setExtractPageRange] = useState("");
   const [imageTargetFormat, setImageTargetFormat] =
-    useState<EnabledImageFormat>("webp");
-  const [resizeMode, setResizeMode] = useState<ResizeMode>("fit");
-  const [resizeWidth, setResizeWidth] = useState("1920");
-  const [resizeHeight, setResizeHeight] = useState("1080");
-  const [jpegCompressionQuality, setJpegCompressionQuality] = useState("82");
-  const [webpCompressionQuality, setWebpCompressionQuality] = useState("80");
-  const [reportFormat, setReportFormat] = useState<ReportFormat>("csv");
+    useState<EnabledImageFormat>(defaultPreferences.imageTargetFormat);
+  const [resizeMode, setResizeMode] = useState<ResizeMode>(
+    defaultPreferences.resizeMode
+  );
+  const [resizeWidth, setResizeWidth] = useState(
+    String(defaultPreferences.resizeWidth)
+  );
+  const [resizeHeight, setResizeHeight] = useState(
+    String(defaultPreferences.resizeHeight)
+  );
+  const [jpegCompressionQuality, setJpegCompressionQuality] = useState(
+    String(defaultPreferences.jpegCompressionQuality)
+  );
+  const [webpCompressionQuality, setWebpCompressionQuality] = useState(
+    String(defaultPreferences.webpCompressionQuality)
+  );
+  const [reportFormat, setReportFormat] = useState<ReportFormat>(
+    defaultPreferences.reportFormat
+  );
+  const [preferencesPanelExpanded, setPreferencesPanelExpanded] = useState(
+    defaultPreferences.preferencesPanelExpanded
+  );
+  const [preferencesReady, setPreferencesReady] = useState(false);
+  const [preferencesMessage, setPreferencesMessage] = useState("");
+  const [preferencesWarning, setPreferencesWarning] = useState("");
+  const [presetMessage, setPresetMessage] = useState("");
   const [reportExporting, setReportExporting] = useState(false);
   const [reportExportMessage, setReportExportMessage] = useState("");
   const [reportExportError, setReportExportError] = useState("");
@@ -627,6 +672,60 @@ function App() {
     async () => undefined
   );
   const cancelledTaskIdsRef = useRef<Set<string>>(new Set());
+  const lastSavedPreferencesRef = useRef<UserPreferences>(defaultPreferences);
+
+  function applyPreferencesToState(preferences: UserPreferences) {
+    setActiveTool(preferences.activeTool);
+    setImageTargetFormat(preferences.imageTargetFormat);
+    setResizeMode(preferences.resizeMode);
+    setResizeWidth(String(preferences.resizeWidth));
+    setResizeHeight(String(preferences.resizeHeight));
+    setJpegCompressionQuality(String(preferences.jpegCompressionQuality));
+    setWebpCompressionQuality(String(preferences.webpCompressionQuality));
+    setReportFormat(preferences.reportFormat);
+    setPreferencesPanelExpanded(preferences.preferencesPanelExpanded);
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadSavedPreferences() {
+      try {
+        const result = await invoke<PreferencesLoadResult>("load_preferences");
+        if (cancelled) {
+          return;
+        }
+
+        lastSavedPreferencesRef.current = result.preferences;
+        applyPreferencesToState(result.preferences);
+        setPreferencesWarning(result.warning ?? "");
+        setPreferencesMessage(
+          result.usedDefaults && !result.warning
+            ? "已使用本机默认偏好设置。"
+            : "偏好设置已从本机载入。"
+        );
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+
+        lastSavedPreferencesRef.current = defaultPreferences;
+        applyPreferencesToState(defaultPreferences);
+        setPreferencesWarning(
+          `无法载入本机偏好设置，已使用安全默认值：${String(error)}`
+        );
+      } finally {
+        if (!cancelled) {
+          setPreferencesReady(true);
+        }
+      }
+    }
+
+    void loadSavedPreferences();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     async function loadSelfCheck() {
@@ -657,6 +756,71 @@ function App() {
 
     void loadSelfCheck();
   }, []);
+
+  const preferenceSnapshot = useMemo(
+    () =>
+      buildPreferenceSnapshot(
+        {
+          activeTool,
+          imageTargetFormat,
+          resizeMode,
+          resizeWidth,
+          resizeHeight,
+          jpegCompressionQuality,
+          webpCompressionQuality,
+          preferencesPanelExpanded,
+          reportFormat
+        },
+        lastSavedPreferencesRef.current
+      ),
+    [
+      activeTool,
+      imageTargetFormat,
+      jpegCompressionQuality,
+      preferencesPanelExpanded,
+      reportFormat,
+      resizeHeight,
+      resizeMode,
+      resizeWidth,
+      webpCompressionQuality
+    ]
+  );
+
+  useEffect(() => {
+    if (
+      !preferencesReady ||
+      JSON.stringify(preferenceSnapshot) ===
+        JSON.stringify(lastSavedPreferencesRef.current)
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+    const timeout = window.setTimeout(() => {
+      setPreferencesMessage("正在保存偏好设置...");
+      void invoke<PreferencesMutationResult>("save_preferences", {
+        preferences: preferenceSnapshot
+      })
+        .then((result) => {
+          if (cancelled) {
+            return;
+          }
+          lastSavedPreferencesRef.current = result.preferences;
+          setPreferencesMessage(result.message);
+          setPreferencesWarning("");
+        })
+        .catch((error) => {
+          if (!cancelled) {
+            setPreferencesWarning(`无法保存本机偏好设置：${String(error)}`);
+          }
+        });
+    }, 500);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+    };
+  }, [preferenceSnapshot, preferencesReady]);
 
   const summary = useMemo(
     () =>
@@ -689,6 +853,7 @@ function App() {
     (reportExportError ? `报告导出问题:\n${reportExportError}` : "") ||
     selectedTaskWithError?.errorLog ||
     (intakeError ? `文件导入问题:\n${intakeError}` : "") ||
+    (preferencesWarning ? `偏好设置问题:\n${preferencesWarning}` : "") ||
     (startupError ? `启动初始化问题:\n${startupError}` : "");
   const qpdfEngine = selfCheck.engines.find((engine) => engine.name === "qpdf");
   const qpdfAvailable = qpdfEngine?.status === "available";
@@ -696,15 +861,22 @@ function App() {
     (engine) => engine.name === "image-engine"
   );
   const imageEngineAvailable = imageEngine?.status === "available";
-  const toolCategories = [
-    { label: "PDF 工具", enabled: qpdfAvailable, note: qpdfAvailable ? "可用" : "不可用" },
-    { label: "图片工具", enabled: imageEngineAvailable, note: imageEngineAvailable ? "可用" : "不可用" },
-    { label: "批量队列", enabled: true, note: "本地" },
-    { label: "文档转 PDF", enabled: false, note: "稍后" },
-    { label: "图片压缩", enabled: imageEngineAvailable, note: imageEngineAvailable ? "Preview" : "不可用" },
-    { label: "隐私清理", enabled: imageEngineAvailable, note: imageEngineAvailable ? "Preview 0.5" : "不可用" },
-    { label: "图片转 PDF", enabled: false, note: "稍后" }
+  const toolCategories: Array<{
+    id: ToolSection | null;
+    label: string;
+    enabled: boolean;
+    note: string;
+  }> = [
+    { id: "pdf", label: "PDF 工具", enabled: true, note: qpdfAvailable ? "可用" : "不可用" },
+    { id: "image-convert", label: "图片格式转换", enabled: true, note: imageEngineAvailable ? "可用" : "不可用" },
+    { id: "image-resize", label: "图片改尺寸", enabled: true, note: imageEngineAvailable ? "可用" : "不可用" },
+    { id: "image-compress", label: "图片压缩", enabled: true, note: imageEngineAvailable ? "可用" : "不可用" },
+    { id: "metadata-cleanup", label: "隐私清理", enabled: true, note: imageEngineAvailable ? "可用" : "不可用" },
+    { id: "report-export", label: "报告导出", enabled: true, note: "本地" },
+    { id: null, label: "文档转 PDF", enabled: false, note: "稍后" },
+    { id: null, label: "图片转 PDF", enabled: false, note: "稍后" }
   ];
+  const activeToolLabel = toolSectionLabels[activeTool];
   const realLocalPdfTasks = tasks.filter(
     (task) =>
       task.extension === "pdf" &&
@@ -714,7 +886,7 @@ function App() {
   );
   const realLocalImageTasks = tasks.filter(
     (task) =>
-      enabledImageExtensions.has(task.extension) &&
+      isEnabledImageExtension(task.extension) &&
       task.sourceKind === "native-path" &&
       Boolean(task.sourcePath) &&
       task.status !== "cancelled"
@@ -758,13 +930,13 @@ function App() {
     canRunSelectedSinglePdfTool && extractPageRange.trim().length > 0;
 
   const selectedEnabledImageTasks = selectedTasks.filter((task) =>
-    enabledImageExtensions.has(task.extension)
+    isEnabledImageExtension(task.extension)
   );
   const selectedHeicImageTasks = selectedTasks.filter(
     (task) => task.extension === "heic"
   );
   const selectedUnsupportedImageTasks = selectedTasks.filter(
-    (task) => !enabledImageExtensions.has(task.extension)
+    (task) => !isEnabledImageExtension(task.extension)
   );
   const selectedImageTasksWithoutPath = selectedEnabledImageTasks.filter(
     (task) => task.sourceKind !== "native-path" || !task.sourcePath
@@ -1105,7 +1277,7 @@ function App() {
     setSelectedTaskIds(
       new Set(
         tasks
-          .filter((task) => enabledImageExtensions.has(task.extension))
+          .filter((task) => isEnabledImageExtension(task.extension))
           .map((task) => task.taskId)
       )
     );
@@ -1293,7 +1465,7 @@ function App() {
 
     for (const file of files) {
       const extension = getExtension(file.name || "");
-      const targetExtension = enabledImageExtensions.has(extension)
+      const targetExtension = isEnabledImageExtension(extension)
         ? imageTargetFormat
         : "pdf";
       const task = createTaskFromFile(file, [
@@ -1339,7 +1511,7 @@ function App() {
     const createdTasks: LocalTask[] = [];
 
     for (const metadata of inspection.files) {
-      const targetExtension = enabledImageExtensions.has(metadata.extension)
+      const targetExtension = isEnabledImageExtension(metadata.extension)
         ? imageTargetFormat
         : "pdf";
       const task = createTaskFromNativePathMetadata(
@@ -1361,7 +1533,7 @@ function App() {
       for (const task of createdTasks) {
         void planBackendOutput(
           task,
-          enabledImageExtensions.has(task.extension) ? imageTargetFormat : "pdf"
+          isEnabledImageExtension(task.extension) ? imageTargetFormat : "pdf"
         );
       }
     }
@@ -1593,7 +1765,7 @@ function App() {
       return currentTasks.map((task) => {
         if (
           !selectedTaskIds.has(task.taskId) ||
-          !enabledImageExtensions.has(task.extension)
+          !isEnabledImageExtension(task.extension)
         ) {
           return task;
         }
@@ -3000,6 +3172,50 @@ function App() {
     }
   }
 
+  function focusToolSection(section: ToolSection) {
+    window.requestAnimationFrame(() => {
+      document.getElementById(toolSectionTargets[section])?.scrollIntoView({
+        behavior: "smooth",
+        block: "start"
+      });
+    });
+  }
+
+  function selectToolSection(section: ToolSection) {
+    setActiveTool(section);
+    setPresetMessage("");
+    focusToolSection(section);
+  }
+
+  function useBuiltInPreset(presetId: BuiltInPresetId) {
+    const nextPreferences = applyBuiltInPreset(preferenceSnapshot, presetId);
+    const preset = builtInPresets.find((candidate) => candidate.id === presetId);
+    applyPreferencesToState(nextPreferences);
+    setPreferencesMessage("");
+    setPresetMessage(
+      `已填充“${preset?.label ?? "常用预设"}”。预设不会自动处理文件。`
+    );
+    focusToolSection(nextPreferences.activeTool);
+  }
+
+  async function resetSavedPreferences() {
+    setPreferencesReady(false);
+    setPreferencesMessage("正在重置偏好设置...");
+    setPreferencesWarning("");
+    setPresetMessage("");
+
+    try {
+      const result = await invoke<PreferencesMutationResult>("reset_preferences");
+      lastSavedPreferencesRef.current = result.preferences;
+      applyPreferencesToState(result.preferences);
+      setPreferencesMessage(result.message);
+    } catch (error) {
+      setPreferencesWarning(`无法重置本机偏好设置：${String(error)}`);
+    } finally {
+      setPreferencesReady(true);
+    }
+  }
+
   return (
     <main className="app-shell">
       <header className="top-bar">
@@ -3030,9 +3246,11 @@ function App() {
             {toolCategories.map((tool) => (
               <button
                 type="button"
-                className={activeTool === tool.label ? "tool-item is-active" : "tool-item"}
-                key={tool.label}
-                onClick={() => setActiveTool(tool.label)}
+                className={
+                  tool.id === activeTool ? "tool-item is-active" : "tool-item"
+                }
+                key={tool.id ?? tool.label}
+                onClick={() => tool.id && selectToolSection(tool.id)}
                 disabled={!tool.enabled}
                 title={
                   tool.enabled
@@ -3054,7 +3272,7 @@ function App() {
         <section className="main-pane" aria-label="文件队列工作台">
           <div className="pane-header">
             <div>
-              <p className="section-kicker">{activeTool}</p>
+              <p className="section-kicker">{activeToolLabel}</p>
               <h2>文件导入</h2>
             </div>
             <div className="pane-header-actions">
@@ -3140,7 +3358,7 @@ function App() {
             ))}
           </section>
 
-          <section className="pdf-tools-panel" aria-label="PDF 工具">
+          <section id="pdf-tools" className="pdf-tools-panel" aria-label="PDF 工具">
             <div className="pdf-tools-header">
               <div>
                 <p className="section-kicker">PDF 工具</p>
@@ -3253,10 +3471,10 @@ function App() {
             </div>
           </section>
 
-          <section className="image-tools-panel" aria-label="Preview 0.5 图片工具">
+          <section className="image-tools-panel" aria-label="Preview 0.7 图片工具">
             <div className="pdf-tools-header">
               <div>
-                <p className="section-kicker">Preview 0.5 · 本地功能预览</p>
+                <p className="section-kicker">Preview 0.7 · 本地功能预览</p>
                 <h2>图片工具</h2>
                 <p>
                   {imageEngineAvailable
@@ -3270,7 +3488,7 @@ function App() {
                   className="secondary-button"
                   onClick={selectImageTasks}
                   disabled={tasks.every(
-                    (task) => !enabledImageExtensions.has(task.extension)
+                    (task) => !isEnabledImageExtension(task.extension)
                   )}
                 >
                   选择全部图片
@@ -3301,7 +3519,7 @@ function App() {
             </div>
 
             <div className="pdf-tool-grid image-tool-grid">
-              <article className="pdf-tool-card image-tool-card">
+              <article id="image-convert-tool" className="pdf-tool-card image-tool-card">
                 <h3>图片格式转换</h3>
                 <p>选择任务和输出格式。结果写入源文件旁边的 converted 文件夹，不覆盖原文件。</p>
                 <ul className="image-conversion-matrix" aria-label="已启用的图片转换方向">
@@ -3330,7 +3548,7 @@ function App() {
                 </button>
               </article>
 
-              <article className="pdf-tool-card image-tool-card image-resize-card">
+              <article id="image-resize-tool" className="pdf-tool-card image-tool-card image-resize-card">
                 <h3>图片改尺寸 <span className="preview-label">Preview</span></h3>
                 <p>保持原格式和宽高比，结果写入 converted 文件夹，不放大较小图片。</p>
                 <fieldset className="resize-mode-fieldset">
@@ -3401,7 +3619,7 @@ function App() {
                 </button>
               </article>
 
-              <article className="pdf-tool-card image-tool-card image-compression-card">
+              <article id="image-compress-tool" className="pdf-tool-card image-tool-card image-compression-card">
                 <h3>图片压缩 <span className="preview-label">Preview 0.4</span></h3>
                 <p>保持源格式。JPEG/WebP 使用质量压缩，PNG 仅做无损优化；结果未变小时不生成新文件。</p>
                 <div className="compression-quality-grid">
@@ -3485,7 +3703,7 @@ function App() {
                 </button>
               </article>
 
-              <article className="pdf-tool-card image-tool-card">
+              <article id="metadata-cleanup-tool" className="pdf-tool-card image-tool-card">
                 <h3>图片元数据清理 <span className="preview-label">Preview 0.5</span></h3>
                 <p>尽力移除常见隐私元数据，保持源格式并写入 cleaned 输出，不修改原文件。</p>
                 <ul className="image-conversion-matrix" aria-label="元数据清理范围">
@@ -3643,7 +3861,7 @@ function App() {
         <aside className="inspector" aria-label="检查器">
           <section className="inspector-card">
             <h2>关于</h2>
-            <p className="about-version">LocalConvert Desktop · Preview 0.6.1</p>
+            <p className="about-version">LocalConvert Desktop · Preview {appVersion}</p>
             <p>
               <strong>by 田宸宇</strong>
             </p>
@@ -3654,13 +3872,77 @@ function App() {
             </p>
           </section>
 
+          <section className="inspector-card preferences-card">
+            <div className="preferences-card-header">
+              <div>
+                <h2>常用预设 / 偏好设置</h2>
+                <p>处理参数自动保存到本机，不会跨设备同步。</p>
+              </div>
+              <button
+                type="button"
+                className="small-button secondary-button"
+                aria-expanded={preferencesPanelExpanded}
+                onClick={() =>
+                  setPreferencesPanelExpanded((expanded) => !expanded)
+                }
+              >
+                {preferencesPanelExpanded ? "收起" : "展开"}
+              </button>
+            </div>
+            {preferencesMessage ? (
+              <p className="preferences-status" role="status">
+                {preferencesMessage}
+              </p>
+            ) : null}
+            {preferencesWarning ? (
+              <p className="preferences-warning" role="alert">
+                {preferencesWarning}
+              </p>
+            ) : null}
+            {preferencesPanelExpanded ? (
+              <div className="preferences-content">
+                <p className="preset-safety-note">
+                  预设只会填充参数，不会自动处理文件。
+                </p>
+                <div className="preset-list" aria-label="常用预设">
+                  {builtInPresets.map((preset) => (
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      key={preset.id}
+                      onClick={() => useBuiltInPreset(preset.id)}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+                {presetMessage ? (
+                  <p className="preset-result" role="status">
+                    {presetMessage}
+                  </p>
+                ) : null}
+                <p className="preferences-privacy-note">
+                  仅保存工具区、格式、尺寸、质量、报告格式与面板状态；不保存任务、文件路径、报告路径、文件内容或元数据。
+                </p>
+                <button
+                  type="button"
+                  className="secondary-button reset-preferences-button"
+                  onClick={() => void resetSavedPreferences()}
+                  disabled={!preferencesReady}
+                >
+                  重置偏好设置
+                </button>
+              </div>
+            ) : null}
+          </section>
+
           <section className="inspector-card">
             <h2>输出规则</h2>
             <p>默认输出到源文件旁边的 converted 文件夹。</p>
             <pre>{outputNameExample.join("\n")}</pre>
           </section>
 
-          <section className="inspector-card report-export-card">
+          <section id="report-export-tool" className="inspector-card report-export-card">
             <h2>导出处理报告</h2>
             <p>
               可导出 {reportRecords.length} 条任务结果。报告仅包含应用已知的任务元数据，不包含文件内容或原始图片元数据。

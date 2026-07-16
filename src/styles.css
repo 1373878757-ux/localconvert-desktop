@@ -861,6 +861,15 @@ h3 {
   background: #ffffff;
 }
 
+#pdf-tools,
+#image-convert-tool,
+#image-resize-tool,
+#image-compress-tool,
+#metadata-cleanup-tool,
+#report-export-tool {
+  scroll-margin-top: 12px;
+}
+
 .inspector-card + .inspector-card {
   margin-top: 10px;
 }
@@ -894,6 +903,76 @@ h3 {
   border-top: 1px solid #e0e5eb;
   color: #596674;
   font-size: 0.78rem;
+}
+
+.preferences-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.preferences-card-header h2 {
+  margin-bottom: 4px;
+}
+
+.preferences-card-header p {
+  margin: 0;
+}
+
+.preferences-card-header > button {
+  flex: 0 0 auto;
+}
+
+.preferences-content {
+  margin-top: 10px;
+  border-top: 1px solid #e0e5eb;
+  padding-top: 10px;
+}
+
+.preset-list {
+  display: grid;
+  gap: 6px;
+}
+
+.preset-list button,
+.reset-preferences-button {
+  width: 100%;
+  min-height: 30px;
+  text-align: left;
+}
+
+.inspector-card .preset-safety-note,
+.inspector-card .preferences-privacy-note,
+.inspector-card .preferences-status,
+.inspector-card .preferences-warning,
+.inspector-card .preset-result {
+  margin: 8px 0 0;
+  font-size: 0.76rem;
+  overflow-wrap: anywhere;
+}
+
+.inspector-card .preset-safety-note {
+  margin: 0 0 8px;
+  color: #3e5965;
+  font-weight: 650;
+}
+
+.inspector-card .preferences-privacy-note {
+  color: #63707d;
+}
+
+.inspector-card .preferences-status,
+.inspector-card .preset-result {
+  color: #1c6b43;
+}
+
+.inspector-card .preferences-warning {
+  color: #8f2a2a;
+}
+
+.reset-preferences-button {
+  margin-top: 9px;
 }
 
 .report-format-field {

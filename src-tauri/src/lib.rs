@@ -15,6 +15,7 @@ mod image_engine;
 mod image_ops;
 mod native_intake;
 mod output_finalize;
+mod preferences;
 mod qpdf;
 mod task_registry;
 mod task_report;
@@ -371,6 +372,9 @@ pub fn run() {
             engine_self_check,
             startup_status,
             plan_output_path,
+            preferences::load_preferences,
+            preferences::save_preferences,
+            preferences::reset_preferences,
             native_intake::inspect_native_paths,
             backend_tasks::image_convert_file,
             backend_tasks::image_resize_file,
