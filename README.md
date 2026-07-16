@@ -12,6 +12,12 @@
 
 > 当前 DMG 为未签名或 ad-hoc 签名的预览构建，尚未完成 Apple Developer ID 公证。请只从官方 GitHub Releases 页面下载，并在打开前核对 SHA-256。
 
+## Project Page
+
+项目静态展示页计划发布于：<https://1373878757-ux.github.io/localconvert-desktop/>
+
+页面源码位于 [`docs/index.html`](docs/index.html)，不使用远程脚本、字体、图片或分析服务。GitHub Pages 尚需在仓库 **Settings > Pages** 中选择 `main` 分支和 `/docs` 目录后才会生效；本文不假设该站点已经启用。
+
 ## Project Overview
 
 LocalConvert Desktop 适合需要处理 PDF 和常见图片、但不希望把文件交给在线转换网站的办公用户。下载安装后，当前已支持 PDF 结构操作、JPG/PNG/WebP 转换与处理，以及 CSV/JSON 任务报告导出。

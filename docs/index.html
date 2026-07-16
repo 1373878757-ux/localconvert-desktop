@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="LocalConvert Desktop 是一款纯本地、无上传、无服务器、无遥测的 PDF 与图片处理工具。"
+    />
+    <meta name="theme-color" content="#f4f6f7" />
+    <title>LocalConvert Desktop · 纯本地文件转换工具</title>
+    <link rel="stylesheet" href="assets/site.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">跳到主要内容</a>
+
+    <header class="site-header">
+      <div class="nav-shell">
+        <a class="brand" href="#top" aria-label="返回 LocalConvert Desktop 页面顶部">
+          <strong>LocalConvert Desktop</strong>
+          <span>by 田宸宇</span>
+        </a>
+        <nav class="site-nav" aria-label="页面导航">
+          <a href="#features">功能</a>
+          <a href="#privacy">隐私</a>
+          <a href="#screenshots">截图</a>
+          <a href="#download">下载</a>
+          <a href="https://github.com/1373878757-ux/localconvert-desktop">GitHub</a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="main-content">
+      <section class="hero" id="top" aria-labelledby="hero-title">
+        <div class="hero-inner">
+          <p class="eyebrow">Preview 0.6.1 · macOS Apple Silicon</p>
+          <h1 id="hero-title">LocalConvert Desktop</h1>
+          <p class="creator">by 田宸宇</p>
+          <p class="hero-lead">纯本地、无上传、无服务器、无遥测的桌面文件处理工具。</p>
+          <p class="hero-copy">
+            在一个本地工作台中处理 PDF、JPG、PNG 与 WebP。文件不会上传，原文件默认不会被覆盖，已支持的操作无需转换服务器。
+          </p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="https://github.com/1373878757-ux/localconvert-desktop/releases/tag/preview-0.6.1-task-usability-macos">
+              下载 Preview 0.6.1
+            </a>
+            <a class="button button-secondary" href="https://github.com/1373878757-ux/localconvert-desktop#readme">
+              查看项目仓库
+            </a>
+          </div>
+          <p class="preview-note">
+            当前为未签名或 ad-hoc 签名、尚未完成 Developer ID 公证的 macOS Apple Silicon 预览构建。打开前请核对 SHA-256。
+          </p>
+        </div>
+      </section>
+
+      <section class="section section-intro" aria-labelledby="intro-title">
+        <div class="content-shell intro-grid">
+          <div>
+            <p class="section-kicker">本地桌面工作台</p>
+            <h2 id="intro-title">为重视文件隐私的日常处理而设计</h2>
+          </div>
+          <p class="section-summary">
+            LocalConvert Desktop 面向需要批量处理 PDF 和常见图片的办公用户与个人用户。应用把转换、任务状态、结果导航和报告导出放在同一个克制的中文界面中，优先保证本地执行、可取消和安全输出。
+          </p>
+        </div>
+      </section>
+
+      <section class="section section-muted" id="features" aria-labelledby="features-title">
+        <div class="content-shell">
+          <div class="section-heading">
+            <p class="section-kicker">当前能力</p>
+            <h2 id="features-title">Preview 0.6.1 功能概览</h2>
+            <p>只展示当前真实启用的能力，不把未来格式写成现有功能。</p>
+          </div>
+          <div class="feature-grid">
+            <article class="feature-item">
+              <h3>PDF 工具</h3>
+              <p>使用内置 qpdf 合并、拆分、旋转 PDF，并抽取指定页面。</p>
+            </article>
+            <article class="feature-item">
+              <h3>图片格式转换</h3>
+              <p>支持 JPG/JPEG、PNG、WebP 之间已启用的本地转换方向。</p>
+            </article>
+            <article class="feature-item">
+              <h3>图片改尺寸</h3>
+              <p>支持适应范围、仅宽度和仅高度，保持宽高比且默认不放大。</p>
+            </article>
+            <article class="feature-item">
+              <h3>图片压缩</h3>
+              <p>JPEG/WebP 质量压缩与 PNG 无损优化；未变小时不发布输出。</p>
+            </article>
+            <article class="feature-item">
+              <h3>元数据隐私清理</h3>
+              <p>尽力清理 JPG、PNG、WebP 中常见的隐私元数据，不宣称法证级清除。</p>
+            </article>
+            <article class="feature-item">
+              <h3>CSV / JSON 报告</h3>
+              <p>导出任务状态和结果摘要，不包含文件内容或原始元数据载荷。</p>
+            </article>
+            <article class="feature-item feature-wide">
+              <h3>任务易用性</h3>
+              <p>支持真实后台取消、打开输出与报告位置、复制精简错误，以及确认后清空界面任务记录。</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section privacy-section" id="privacy" aria-labelledby="privacy-title">
+        <div class="content-shell privacy-grid">
+          <div>
+            <p class="section-kicker">Privacy by design</p>
+            <h2 id="privacy-title">文件留在本机，输出保留边界</h2>
+            <p class="section-summary">
+              支持的处理由随应用打包的本地引擎完成，不要求账户、云存储或转换服务器。
+            </p>
+          </div>
+          <ul class="check-list">
+            <li>文件在本机处理，不上传。</li>
+            <li>受支持的转换不依赖服务器。</li>
+            <li>应用不采集遥测。</li>
+            <li>原文件不会被覆盖。</li>
+            <li>失败与取消只清理任务自有临时文件。</li>
+          </ul>
+          <aside class="privacy-note" aria-label="任务报告隐私提示">
+            <strong>报告分享前请检查路径</strong>
+            <p>CSV/JSON 报告可能包含本地文件路径，但不包含文件内容或原始 EXIF、GPS、XMP、IPTC 数据。</p>
+          </aside>
+        </div>
+      </section>
+
+      <section class="section section-muted" id="screenshots" aria-labelledby="screenshots-title">
+        <div class="content-shell">
+          <div class="section-heading">
+            <p class="section-kicker">真实应用画面</p>
+            <h2 id="screenshots-title">Preview 0.6.1 截图</h2>
+            <p>截图来自实际 macOS 应用，并使用无个人信息的合成演示文件。</p>
+          </div>
+          <div class="gallery-grid">
+            <figure class="gallery-item gallery-main">
+              <a href="assets/screenshots/main-window.png">
+                <img
+                  src="assets/screenshots/main-window.png"
+                  alt="LocalConvert Desktop Preview 0.6.1 中文主工作台，显示 PDF 工具、图片工具与右侧检查器"
+                  width="1308"
+                  height="768"
+                />
+              </a>
+              <figcaption>主工作台与本地隐私状态</figcaption>
+            </figure>
+            <figure class="gallery-item">
+              <a href="assets/screenshots/pdf-tools.png">
+                <img
+                  loading="lazy"
+                  src="assets/screenshots/pdf-tools.png"
+                  alt="已选择两个合成 PDF 的 qpdf 合并、拆分、旋转和页面提取工具"
+                  width="1308"
+                  height="768"
+                />
+              </a>
+              <figcaption>PDF 工具</figcaption>
+            </figure>
+            <figure class="gallery-item">
+              <a href="assets/screenshots/image-tools.png">
+                <img
+                  loading="lazy"
+                  src="assets/screenshots/image-tools.png"
+                  alt="JPG、PNG、WebP 图片转换、改尺寸、压缩与元数据清理工具"
+                  width="1308"
+                  height="768"
+                />
+              </a>
+              <figcaption>图片工具</figcaption>
+            </figure>
+            <figure class="gallery-item">
+              <a href="assets/screenshots/task-results.png">
+                <img
+                  loading="lazy"
+                  src="assets/screenshots/task-results.png"
+                  alt="包含等待和已完成状态的本地任务结果列表"
+                  width="1308"
+                  height="768"
+                />
+              </a>
+              <figcaption>任务结果与输出位置操作</figcaption>
+            </figure>
+            <figure class="gallery-item">
+              <a href="assets/screenshots/report-export.png">
+                <img
+                  loading="lazy"
+                  src="assets/screenshots/report-export.png"
+                  alt="CSV 和 JSON 任务报告导出面板及本地路径隐私提示"
+                  width="1308"
+                  height="768"
+                />
+              </a>
+              <figcaption>报告导出与隐私提示</figcaption>
+            </figure>
+            <figure class="gallery-item gallery-about">
+              <a href="assets/screenshots/about-panel.png">
+                <img
+                  loading="lazy"
+                  src="assets/screenshots/about-panel.png"
+                  alt="About 面板显示 Preview 0.6.1、by 田宸宇 与尚未公证提示"
+                  width="320"
+                  height="300"
+                />
+              </a>
+              <figcaption>About 与发布状态</figcaption>
+            </figure>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="technology" aria-labelledby="technology-title">
+        <div class="content-shell technology-grid">
+          <div>
+            <p class="section-kicker">技术实现</p>
+            <h2 id="technology-title">桌面前端与 Rust 本地边界</h2>
+            <p class="section-summary">
+              前端只调用结构化 Tauri 命令；本地路径、任务生命周期、sidecar 进程和输出发布由 Rust 后端负责。
+            </p>
+          </div>
+          <dl class="stack-list">
+            <div><dt>Tauri v2</dt><dd>桌面窗口、原生路径入口与打包</dd></div>
+            <div><dt>React + TypeScript</dt><dd>中文工作台、任务状态与报告交互</dd></div>
+            <div><dt>Rust backend commands</dt><dd>校验、队列、取消、超时和原子输出</dd></div>
+            <div><dt>qpdf sidecar</dt><dd>PDF 结构操作</dd></div>
+            <div><dt>image-engine sidecar</dt><dd>图片转换、改尺寸、压缩与隐私清理</dd></div>
+          </dl>
+        </div>
+      </section>
+
+      <section class="section section-muted" id="timeline" aria-labelledby="timeline-title">
+        <div class="content-shell">
+          <div class="section-heading">
+            <p class="section-kicker">版本路线</p>
+            <h2 id="timeline-title">从可靠 PDF 工具到批量任务体验</h2>
+          </div>
+          <ol class="timeline-list">
+            <li><strong>0.1.x</strong><span>PDF 可靠性与 qpdf 预览</span></li>
+            <li><strong>0.2.0</strong><span>图片格式转换</span></li>
+            <li><strong>0.3.0</strong><span>图片等比改尺寸</span></li>
+            <li><strong>0.4.0</strong><span>图片压缩与优化</span></li>
+            <li><strong>0.5.0</strong><span>元数据隐私清理</span></li>
+            <li><strong>0.5.1</strong><span>macOS 安装与校验指引</span></li>
+            <li><strong>0.6.0</strong><span>CSV / JSON 报告导出</span></li>
+            <li class="timeline-current"><strong>0.6.1</strong><span>任务易用性优化</span></li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="section" id="limitations" aria-labelledby="limitations-title">
+        <div class="content-shell limitations-grid">
+          <div>
+            <p class="section-kicker">当前边界</p>
+            <h2 id="limitations-title">预览版限制</h2>
+          </div>
+          <ul class="plain-list">
+            <li>HEIC 转换、改尺寸、压缩和元数据清理尚未启用。</li>
+            <li>GIF、TIFF/TIF、RAW 图片处理尚未启用。</li>
+            <li>Office、视频和音频处理尚未启用。</li>
+            <li>Windows x64 与 Intel macOS 公开构建尚不可用。</li>
+            <li>元数据清理是最佳努力，不是法证级彻底清除。</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="section download-section" id="download" aria-labelledby="download-title">
+        <div class="content-shell download-grid">
+          <div>
+            <p class="section-kicker">安全下载</p>
+            <h2 id="download-title">Preview 0.6.1</h2>
+            <p>
+              只从官方 GitHub Release 下载当前 macOS Apple Silicon 预览构建。该 DMG 尚未完成 Developer ID 公证，macOS 可能显示 Gatekeeper 提示。
+            </p>
+            <a class="button button-primary" href="https://github.com/1373878757-ux/localconvert-desktop/releases/tag/preview-0.6.1-task-usability-macos">
+              前往 GitHub Release
+            </a>
+          </div>
+          <div class="checksum-panel">
+            <h3>SHA-256</h3>
+            <code class="checksum">a6d31a49a60b00e27375ef41305369c4f8a41fa3f352ee5466e03210842e0597</code>
+            <h3>macOS 校验命令</h3>
+            <pre><code>shasum -a 256 "LocalConvert.Desktop_0.6.1_aarch64.dmg"</code></pre>
+            <p>计算结果必须与上方摘要及 GitHub Release asset digest 一致；不一致时不要打开文件。</p>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="content-shell footer-grid">
+        <div>
+          <strong>LocalConvert Desktop</strong>
+          <span>by 田宸宇</span>
+          <p>Pure local processing · 不上传 · 不依赖服务器</p>
+        </div>
+        <nav aria-label="项目文档链接">
+          <a href="https://github.com/1373878757-ux/localconvert-desktop#readme">README</a>
+          <a href="showcase.md">项目展示</a>
+          <a href="portfolio-brief.md">一页作品集简介</a>
+        </nav>
+      </div>
+    </footer>
+  </body>
+</html>
