@@ -47,6 +47,7 @@ export type LocalTask = {
   reportSavedBytes?: number;
   reportSavedPercent?: number;
   reportMessage?: string;
+  outputLocationPath?: string;
 };
 
 export function getExtension(fileName: string): string {

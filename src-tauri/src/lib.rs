@@ -18,6 +18,7 @@ mod output_finalize;
 mod qpdf;
 mod task_registry;
 mod task_report;
+mod task_usability;
 mod timed_process;
 
 const DEFAULT_OUTPUT_STRATEGY: &str = "converted-folder-next-to-source";
@@ -351,7 +352,9 @@ fn path_to_string(path: &Path) -> String {
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .manage(StartupState::default())
         .manage(task_registry::BackendTaskRegistry::default())
         .setup(|app| {
@@ -382,7 +385,9 @@ pub fn run() {
             backend_tasks::qpdf_extract_pages,
             backend_tasks::qpdf_rotate_pages,
             backend_tasks::cancel_task,
-            task_report::export_task_report
+            task_report::export_task_report,
+            task_usability::reveal_local_file,
+            task_usability::copy_error_summary
         ])
         .run(tauri::generate_context!())
         .expect("failed to run LocalConvert Desktop");

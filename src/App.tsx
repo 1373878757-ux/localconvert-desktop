@@ -275,6 +275,19 @@ type ExportTaskReportResult = {
   message: string;
 };
 
+type RevealLocalFileResult = {
+  success: boolean;
+  targetPath: string;
+  containingFolderPath: string;
+  message: string;
+};
+
+type CopyErrorSummaryResult = {
+  success: boolean;
+  summary: string;
+  message: string;
+};
+
 type TaskReportCompletion = {
   status: TaskReportStatus;
   message: string;
@@ -284,13 +297,14 @@ type TaskReportCompletion = {
   outputBytes?: number;
   savedBytes?: number;
   savedPercent?: number;
+  outputLocationPath?: string;
 };
 
 const maxResizeDimension = 16_384;
 const maxResizePixels = 64_000_000;
 const minCompressionQuality = 40;
 const maxCompressionQuality = 95;
-const appVersion = "0.6.0";
+const appVersion = "0.6.1";
 
 const fallbackSelfCheck: EngineSelfCheck = {
   platform: "桌面预览",
@@ -375,7 +389,8 @@ function startTaskOperation(
     reportOutputBytes: undefined,
     reportSavedBytes: undefined,
     reportSavedPercent: undefined,
-    reportMessage: undefined
+    reportMessage: undefined,
+    outputLocationPath: undefined
   };
 }
 
@@ -398,7 +413,9 @@ function finishTaskOperation(
     reportOutputBytes: completion.outputBytes,
     reportSavedBytes: completion.savedBytes,
     reportSavedPercent: completion.savedPercent,
-    reportMessage: completion.message
+    reportMessage: completion.message,
+    outputLocationPath:
+      completion.outputLocationPath ?? completion.outputPath ?? undefined
   };
 }
 
@@ -415,8 +432,22 @@ function clearTaskReport(task: LocalTask): LocalTask {
     reportOutputBytes: undefined,
     reportSavedBytes: undefined,
     reportSavedPercent: undefined,
-    reportMessage: undefined
+    reportMessage: undefined,
+    outputLocationPath: undefined
   };
+}
+
+function copyableTaskError(task: LocalTask): string {
+  const eligibleStatus =
+    task.reportStatus === "failed" ||
+    task.reportStatus === "unsupported" ||
+    task.reportStatus === "skipped";
+
+  if (!eligibleStatus) {
+    return "";
+  }
+
+  return (task.reportMessage || task.errorLog).trim();
 }
 
 function fileNameFromPath(path: string): string {
@@ -584,6 +615,10 @@ function App() {
   const [reportExporting, setReportExporting] = useState(false);
   const [reportExportMessage, setReportExportMessage] = useState("");
   const [reportExportError, setReportExportError] = useState("");
+  const [lastReportPath, setLastReportPath] = useState("");
+  const [copiedTaskId, setCopiedTaskId] = useState("");
+  const [showClearHistoryConfirmation, setShowClearHistoryConfirmation] =
+    useState(false);
   const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(
     () => new Set()
   );
@@ -1458,6 +1493,7 @@ function App() {
       setReportExportMessage(
         `${result.message}：${result.destinationPath}（${result.taskCount} 条，${formatBytes(result.bytesWritten)}）`
       );
+      setLastReportPath(result.destinationPath);
     } catch (error) {
       const message =
         typeof error === "string"
@@ -1468,6 +1504,80 @@ function App() {
       setReportExportError(message);
     } finally {
       setReportExporting(false);
+    }
+  }
+
+  async function revealTaskOutput(task: LocalTask) {
+    if (!task.outputLocationPath) {
+      setFolderMessage("该任务没有可打开的已发布输出文件。");
+      return;
+    }
+
+    try {
+      const result = await invoke<RevealLocalFileResult>("reveal_local_file", {
+        path: task.outputLocationPath
+      });
+      setFolderMessage(`${result.message} ${result.targetPath}`);
+    } catch (error) {
+      const message =
+        typeof error === "string"
+          ? error
+          : error instanceof Error
+            ? error.message
+            : "无法打开输出位置。";
+      setFolderMessage(message);
+    }
+  }
+
+  async function revealLastReport() {
+    if (!lastReportPath) {
+      setReportExportError("当前会话还没有成功导出的报告。");
+      return;
+    }
+
+    setReportExportError("");
+    try {
+      const result = await invoke<RevealLocalFileResult>("reveal_local_file", {
+        path: lastReportPath
+      });
+      setReportExportMessage(`${result.message} ${result.targetPath}`);
+    } catch (error) {
+      const message =
+        typeof error === "string"
+          ? error
+          : error instanceof Error
+            ? error.message
+            : "无法打开报告位置。";
+      setReportExportError(message);
+    }
+  }
+
+  async function copyTaskError(task: LocalTask) {
+    const message = copyableTaskError(task);
+    if (!message) {
+      setFolderMessage("该任务没有可复制的错误摘要。");
+      return;
+    }
+
+    try {
+      const result = await invoke<CopyErrorSummaryResult>("copy_error_summary", {
+        message
+      });
+      setCopiedTaskId(task.taskId);
+      setFolderMessage(`${result.message}：${result.summary}`);
+      window.setTimeout(() => {
+        setCopiedTaskId((currentTaskId) =>
+          currentTaskId === task.taskId ? "" : currentTaskId
+        );
+      }, 1800);
+    } catch (error) {
+      const message =
+        typeof error === "string"
+          ? error
+          : error instanceof Error
+            ? error.message
+            : "剪贴板当前不可用。";
+      setFolderMessage(message);
     }
   }
 
@@ -1688,6 +1798,26 @@ function App() {
     });
   }
 
+  function clearTaskHistory() {
+    if (summary.converting > 0) {
+      setFolderMessage("请先取消并等待所有运行中的任务结束，再清空记录。");
+      return;
+    }
+
+    setShowClearHistoryConfirmation(true);
+  }
+
+  function confirmClearTaskHistory() {
+    setTasks([]);
+    setSelectedTaskIds(new Set());
+    cancelledTaskIdsRef.current.clear();
+    setCopiedTaskId("");
+    setReportExportMessage("");
+    setReportExportError("");
+    setShowClearHistoryConfirmation(false);
+    setFolderMessage("已清空当前界面记录，未删除任何源文件、输出文件或报告。");
+  }
+
   async function mergePdfTasks() {
     const mergeTasks = selectedRealLocalPdfTasks;
     if (!canMergeSelectedPdfs) {
@@ -1895,7 +2025,8 @@ function App() {
               outputPath: outputPaths.join(" | "),
               outputName: outputPaths.map(fileNameFromPath).join(" | "),
               outputExtension: outputPaths.length > 0 ? "pdf" : "",
-              outputBytes: result.outputBytes
+              outputBytes: result.outputBytes,
+              outputLocationPath: outputPaths[0]
             },
             finishedAt
           );
@@ -2926,14 +3057,29 @@ function App() {
               <p className="section-kicker">{activeTool}</p>
               <h2>文件导入</h2>
             </div>
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={clearCompletedTasks}
-              disabled={summary.completed === 0}
-            >
-              清除已完成
-            </button>
+            <div className="pane-header-actions">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={clearCompletedTasks}
+                disabled={summary.completed === 0}
+              >
+                清除已完成
+              </button>
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={clearTaskHistory}
+                disabled={tasks.length === 0 || summary.converting > 0}
+                title={
+                  summary.converting > 0
+                    ? "请先取消运行中的任务。"
+                    : "只清空当前界面记录，不删除任何文件。"
+                }
+              >
+                清空记录
+              </button>
+            </div>
           </div>
 
           <section
@@ -3382,7 +3528,12 @@ function App() {
             {tasks.length === 0 ? (
               <div className="empty-state">
                 <h3>暂无任务</h3>
-                <p>添加文件后会创建等待任务。</p>
+                <p>将文件拖到上方区域，或点击“选择文件”开始。</p>
+                <ul>
+                  <li>所有处理均在本机完成。</li>
+                  <li>原文件不会被覆盖。</li>
+                  <li>任务完成后可以导出 CSV 或 JSON 报告。</li>
+                </ul>
               </div>
             ) : (
               <div className="task-table" role="table" aria-label="本地任务">
@@ -3429,6 +3580,26 @@ function App() {
                       </small>
                     </div>
                     <div className="task-actions">
+                      {task.status === "completed" && task.outputLocationPath ? (
+                        <button
+                          type="button"
+                          className="small-button secondary-button"
+                          onClick={() => void revealTaskOutput(task)}
+                        >
+                          打开输出位置
+                        </button>
+                      ) : null}
+                      {copyableTaskError(task) ? (
+                        <button
+                          type="button"
+                          className="small-button secondary-button"
+                          onClick={() => void copyTaskError(task)}
+                        >
+                          {copiedTaskId === task.taskId
+                            ? "已复制"
+                            : "复制错误信息"}
+                        </button>
+                      ) : null}
                       <button
                         type="button"
                         className="small-button"
@@ -3472,7 +3643,7 @@ function App() {
         <aside className="inspector" aria-label="检查器">
           <section className="inspector-card">
             <h2>关于</h2>
-            <p className="about-version">LocalConvert Desktop · Preview 0.6.0</p>
+            <p className="about-version">LocalConvert Desktop · Preview 0.6.1</p>
             <p>
               <strong>by 田宸宇</strong>
             </p>
@@ -3516,6 +3687,20 @@ function App() {
             >
               {reportExporting ? "正在导出..." : "导出报告"}
             </button>
+            {lastReportPath ? (
+              <div className="report-location">
+                <span title={lastReportPath}>
+                  最近报告：{fileNameFromPath(lastReportPath)}
+                </span>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => void revealLastReport()}
+                >
+                  打开报告位置
+                </button>
+              </div>
+            ) : null}
             <p className="report-privacy-note">
               隐私提醒：报告可能包含本机文件路径。分享前请先检查；不会导出文件内容、GPS 值或原始 EXIF/XMP/IPTC 数据。
             </p>
@@ -3571,6 +3756,40 @@ function App() {
           </section>
         </aside>
       </div>
+      {showClearHistoryConfirmation ? (
+        <div className="confirmation-overlay">
+          <section
+            className="confirmation-dialog"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="clear-history-title"
+            aria-describedby="clear-history-description"
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                setShowClearHistoryConfirmation(false);
+              }
+            }}
+          >
+            <h2 id="clear-history-title">清空任务记录？</h2>
+            <p id="clear-history-description">
+              只会清空当前界面记录，不会删除任何文件。
+            </p>
+            <div className="confirmation-actions">
+              <button
+                type="button"
+                className="secondary-button"
+                autoFocus
+                onClick={() => setShowClearHistoryConfirmation(false)}
+              >
+                取消
+              </button>
+              <button type="button" onClick={confirmClearTaskHistory}>
+                确认清空
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </main>
   );
 }

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Preview 0.6.1 - Task Result Usability
+
+- Aligned npm, Cargo, and Tauri application version metadata to `0.6.1`.
+- Added safe system-file-manager navigation for published task outputs and the last successfully exported CSV or JSON report.
+- Added write-only clipboard handling for concise failed, unsupported, and skipped task summaries, with raw metadata payload lines excluded.
+- Added confirmed in-memory task-history cleanup that never deletes source files, outputs, reports, logs, or temporary directories.
+- Improved the Chinese task empty state and missing-path feedback while keeping creator attribution intact.
+- Kept report serialization, qpdf, image conversion, resize, compression, metadata cleanup, bundled engines, and local-only guarantees unchanged.
+
 ### Preview 0.6.0 - Local Task Report Export
 
 - Aligned npm, Cargo, and Tauri application version metadata to `0.6.0`.

@@ -4,7 +4,7 @@ by 田宸宇
 
 Slogan: 让可能发生在这儿。
 
-Current development line: **Preview 0.6.0** for macOS Apple Silicon. Preview builds are not yet Developer ID notarized. Download release artifacts only from the [official LocalConvert Desktop GitHub Releases page](https://github.com/1373878757-ux/localconvert-desktop/releases) and verify the published SHA-256 checksum before opening them.
+Current development line: **Preview 0.6.1** for macOS Apple Silicon. Preview builds are not yet Developer ID notarized. Download release artifacts only from the [official LocalConvert Desktop GitHub Releases page](https://github.com/1373878757-ux/localconvert-desktop/releases) and verify the published SHA-256 checksum before opening them.
 
 ## Project Overview
 
@@ -50,6 +50,9 @@ The first implementation should focus on a dependable v1 conversion set, clear t
 - Retry and cancellation for queued or running tasks where safe.
 - Success and failure summaries after batch work.
 - Local CSV and JSON export for completed, failed, cancelled, skipped, not-smaller, and unsupported task results.
+- Finder navigation for published outputs and the last successfully exported report.
+- Concise error-summary copying without source contents or raw metadata payloads.
+- Confirmed in-memory task-history cleanup that never deletes source files, outputs, reports, logs, or temporary directories.
 - Failure logs that capture command context and engine output without copying or retaining source files.
 
 ## Supported Conversions
@@ -73,6 +76,8 @@ Preview 0.4 adds local same-format image compression and size optimization for J
 Preview 0.5 adds local metadata and privacy cleanup for JPG/JPEG, PNG, and WebP on macOS Apple Silicon. The first-party engine removes common EXIF, GPS, camera/device, XMP, IPTC, PNG text, and WebP EXIF/XMP container metadata where supported while preserving the source format and visual dimensions. PNG and WebP cleanup, and JPEG cleanup when no orientation transform is required, operate at the container level so encoded pixel payloads are preserved. A JPEG that relies on EXIF orientation is first normalized visually and then re-encoded at JPEG quality 95 before the stale orientation metadata is removed; this necessary JPEG path may change compressed pixel bytes slightly. Cleaned outputs use collision-safe names containing `cleaned`, such as `report cleaned.jpg`. If no removable metadata is found, the backend publishes no final output and reports `未发现可清理的元数据，未生成新文件`. This is a best-effort privacy tool, not forensic-grade sanitization, and users should verify important files before sharing.
 
 Preview 0.6 adds fully local batch task report export for task results already held by the app. Users can choose UTF-8 CSV or pretty-printed JSON and save through the native desktop save dialog. Reports contain task identifiers, operation and result status, local source and output paths, timestamps, available byte savings, and user-facing result summaries. They never contain source file contents or raw EXIF, GPS, XMP, IPTC, or other image metadata payloads. Because reports may contain sensitive local file paths, users should review them before sharing. Cancelling the save dialog does not alter task status or clear task history.
+
+Preview 0.6.1 improves task-result usability without changing conversion or report serialization. Successful tasks with a published output can reveal that local file in the system file manager. After a successful CSV or JSON export, the app remembers that report path for the current session and can reveal it as well; cancelling the save dialog does not replace the remembered path. Failed, unsupported, and skipped results can copy one concise human-readable summary through a write-only clipboard boundary that excludes file contents and raw EXIF, GPS, XMP, or IPTC payloads. “Clear history” requires confirmation and clears only in-memory task records and selections; it never deletes source files, output files, reports, logs, or temporary directories.
 
 A first-party Rust `image-engine` sidecar performs conversion, resizing, compression, and metadata cleanup locally and is enabled only after its startup version and self-check validation pass. Real operations require Tauri-native local paths; browser-only `File` tasks remain metadata previews. Image batches fail closed when any selected item has no native path, uses an unsupported format, has invalid dimensions or quality, is cancelled, or is already running. The Rust backend validates requests, creates the source-adjacent `converted` folder only at execution time, refuses overwrites, launches the sidecar with argument arrays, captures diagnostics, and validates the output before reporting success. JPEG and WebP orientation metadata exposed by the current decoder is applied to pixel data before conversion, resizing, or compression, and stale orientation metadata is not copied to the output. AVIF, TIFF/TIF, HEIC, GIF, and RAW remain disabled for metadata cleanup; images-to-PDF is not enabled yet. The current engine does not decode HEIC or apply HEIC orientation metadata.
 
@@ -233,6 +238,9 @@ Expected queue behavior:
 - A cancelled backend task must remain cancelled even if a sidecar completion result arrives late, and task-owned partial outputs must be removed.
 - Running tasks must be cancelled before they can be removed from the visible queue.
 - Completed tasks should offer an action to open the output folder.
+- The most recently exported report should offer the same local location action after a successful export; cancelling the save dialog must not change it.
+- Failed, unsupported, and skipped results may copy only a concise human-readable error summary, never file contents or raw metadata payloads.
+- Clearing task history must require confirmation and affect only the current in-memory UI records, not any local files or logs.
 - Batch completion should show a success and failure summary.
 
 ## Office Conversion Notes
@@ -254,7 +262,7 @@ Office rendering can differ from the source application's native output. The v1 
 
 ## Development Setup
 
-This repository includes a Tauri v2, React, and TypeScript desktop app for LocalConvert Desktop. The current Preview 0.6.0 implementation includes a Simplified Chinese UI, branded startup splash screen, Tauri-native file selection and drag-and-drop intake, a local task queue, local CSV/JSON task report export, backend output path planning, the bundled macOS Apple Silicon qpdf sidecar, startup engine self-checks, real local PDF merge, split, page extraction, and rotate execution, and real local JPG/JPEG, PNG, and WebP conversion, resizing, same-format compression, and best-effort metadata cleanup through the first-party Rust `image-engine` sidecar. Each startup engine smoke check has a three-second timeout; a failed, timed-out, or panicking check is stored as a local startup error and never prevents the main window from opening after the splash minimum display time. Real qpdf and image-engine jobs run through an asynchronous Rust task registry with task-ID status arbitration, child-process cancellation, task-owned temporary outputs, validated atomic no-overwrite publication, and scoped cleanup. Compression outputs are published only when they are smaller than their source, and metadata cleanup outputs are published only when removable metadata is found. Native desktop intake records validated absolute paths and reads filesystem metadata only; browser-only `File` fallback tasks remain metadata previews and cannot run real conversion operations. Report export writes only the task metadata already held by the UI through a Rust backend command; it does not read source file contents or export raw image metadata. AVIF, TIFF/TIF, HEIC, GIF, RAW, images-to-PDF, Office conversion, and PDFium rasterization remain disabled until intentionally enabled in later implementation steps.
+This repository includes a Tauri v2, React, and TypeScript desktop app for LocalConvert Desktop. The current Preview 0.6.1 implementation includes a Simplified Chinese UI, branded startup splash screen, Tauri-native file selection and drag-and-drop intake, a local task queue, local CSV/JSON task report export, safe local output/report location navigation, concise error-summary copying, confirmed in-memory history cleanup, backend output path planning, the bundled macOS Apple Silicon qpdf sidecar, startup engine self-checks, real local PDF merge, split, page extraction, and rotate execution, and real local JPG/JPEG, PNG, and WebP conversion, resizing, same-format compression, and best-effort metadata cleanup through the first-party Rust `image-engine` sidecar. Each startup engine smoke check has a three-second timeout; a failed, timed-out, or panicking check is stored as a local startup error and never prevents the main window from opening after the splash minimum display time. Real qpdf and image-engine jobs run through an asynchronous Rust task registry with task-ID status arbitration, child-process cancellation, task-owned temporary outputs, validated atomic no-overwrite publication, and scoped cleanup. Compression outputs are published only when they are smaller than their source, and metadata cleanup outputs are published only when removable metadata is found. Native desktop intake records validated absolute paths and reads filesystem metadata only; browser-only `File` fallback tasks remain metadata previews and cannot run real conversion operations. Report export writes only the task metadata already held by the UI through a Rust backend command; it does not read source file contents or export raw image metadata. Local navigation validates that a remembered absolute path still exists before revealing it, and clipboard access is write-only for a filtered summary. AVIF, TIFF/TIF, HEIC, GIF, RAW, images-to-PDF, Office conversion, and PDFium rasterization remain disabled until intentionally enabled in later implementation steps.
 
 Development machines need the normal Tauri v2 toolchain requirements for the target platform, including Node.js, npm, Rust 1.89 or newer, Cargo, and platform-specific build dependencies. Rust 1.89 is required by the pinned WebP encoder used to build the first-party `image-engine` sidecar.
 
@@ -331,6 +339,7 @@ The packaging process should include a post-install smoke test pass that confirm
 5. Create the prerelease from the validated tag and upload only the validated DMG.
 6. Compare the GitHub asset digest and size with the local validated artifact before considering the prerelease complete.
 7. Export one CSV and one JSON task report, confirm both are valid UTF-8 text, and verify they contain local paths but no file contents or raw image metadata payloads.
+8. Reveal one published output and the last exported report, copy one concise task error, then clear history and confirm that no local file was deleted.
 
 ## Smoke Tests
 

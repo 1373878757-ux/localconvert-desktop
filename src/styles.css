@@ -291,10 +291,15 @@ h3 {
 }
 
 .button-row,
-.task-actions {
+.task-actions,
+.pane-header-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+.pane-header-actions {
+  justify-content: flex-end;
 }
 
 .hidden-input {
@@ -708,7 +713,23 @@ h3 {
 }
 
 .empty-state p {
-  margin-bottom: 0;
+  margin-bottom: 10px;
+}
+
+.empty-state ul {
+  display: inline-grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  text-align: left;
+}
+
+.empty-state li::before {
+  content: "✓";
+  margin-right: 7px;
+  color: #1f7890;
+  font-weight: 700;
 }
 
 .task-table {
@@ -895,6 +916,64 @@ h3 {
 
 .report-export-card > button {
   width: 100%;
+}
+
+.report-location {
+  display: grid;
+  gap: 7px;
+  margin-top: 9px;
+  border-top: 1px solid #e0e5eb;
+  padding-top: 9px;
+}
+
+.report-location span {
+  overflow: hidden;
+  color: #52606d;
+  font-size: 0.76rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.report-location button {
+  width: 100%;
+}
+
+.confirmation-overlay {
+  position: fixed;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  inset: 0;
+  padding: 24px;
+  background: rgba(22, 29, 37, 0.38);
+}
+
+.confirmation-dialog {
+  width: min(380px, 100%);
+  border: 1px solid #cfd6de;
+  border-radius: 8px;
+  padding: 18px;
+  background: #ffffff;
+  box-shadow: 0 12px 30px rgba(22, 29, 37, 0.18);
+}
+
+.confirmation-dialog h2 {
+  margin: 0 0 8px;
+  font-size: 1rem;
+}
+
+.confirmation-dialog p {
+  margin: 0;
+  color: #52606d;
+  font-size: 0.84rem;
+  line-height: 1.55;
+}
+
+.confirmation-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
 }
 
 .inspector-card .report-privacy-note {

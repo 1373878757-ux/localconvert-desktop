@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main-local-file-intake",
-  "description": "Allows the main workbench to open native file and report save dialogs while keeping file access behind Rust commands.",
+  "description": "Allows native file and report dialogs. Local file reveal and write-only error-summary clipboard actions stay behind validated Rust commands, so no generic opener or clipboard guest permission is granted.",
   "windows": ["main"],
   "permissions": ["core:default", "dialog:allow-open", "dialog:allow-save"]
 }
