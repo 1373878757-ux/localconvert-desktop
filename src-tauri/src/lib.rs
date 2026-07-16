@@ -226,7 +226,8 @@ pub fn run() {
             backend_tasks::cancel_task,
             task_report::export_task_report,
             task_usability::reveal_local_file,
-            task_usability::copy_error_summary
+            task_usability::copy_error_summary,
+            task_usability::copy_failed_task_summary
         ])
         .run(tauri::generate_context!())
         .expect("failed to run LocalConvert Desktop");

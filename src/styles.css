@@ -702,6 +702,91 @@ h3 {
   font-size: 0.82rem;
 }
 
+.queue-bulk-actions,
+.queue-filters,
+.queue-counters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.queue-bulk-actions {
+  justify-content: flex-end;
+}
+
+.queue-controls {
+  display: grid;
+  grid-template-columns: minmax(210px, 0.7fr) minmax(0, 1.3fr);
+  gap: 10px;
+  align-items: end;
+  border-bottom: 1px solid #e5e9ee;
+  padding: 10px 12px;
+  background: #fbfcfd;
+}
+
+.queue-search {
+  display: grid;
+  gap: 4px;
+  color: #56616d;
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+
+.queue-search input {
+  width: 100%;
+}
+
+.queue-filters {
+  justify-content: flex-end;
+}
+
+.queue-filters button {
+  border-color: #cbd3dc;
+  padding: 6px 9px;
+  color: #46525f;
+  background: #ffffff;
+  font-size: 0.76rem;
+}
+
+.queue-filters button.is-active {
+  border-color: #1f7890;
+  color: #155c70;
+  background: #eaf5f8;
+}
+
+.queue-counters {
+  border-bottom: 1px solid #e5e9ee;
+  padding: 8px 12px;
+  color: #626d79;
+  font-size: 0.76rem;
+}
+
+.queue-counters span {
+  border-right: 1px solid #dfe4ea;
+  padding-right: 8px;
+}
+
+.queue-counters span:last-child {
+  border-right: 0;
+}
+
+.queue-counters strong {
+  color: #26313b;
+}
+
+.queue-message {
+  margin: 0;
+  border-bottom: 1px solid #e5e9ee;
+  padding: 8px 12px;
+  color: #385261;
+  background: #f5fafc;
+  font-size: 0.8rem;
+}
+
+.queue-empty-filter {
+  padding: 18px;
+}
+
 .empty-state {
   margin: 12px;
   border: 1px dashed #c8d0da;
@@ -1262,6 +1347,15 @@ h3 {
   .queue-heading {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .queue-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .queue-filters,
+  .queue-bulk-actions {
+    justify-content: flex-start;
   }
 
   .status-summary {

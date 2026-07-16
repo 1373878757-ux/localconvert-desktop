@@ -13,6 +13,7 @@ import {
   BackendTaskStatus,
   LocalTask,
   NativePathMetadata,
+  TaskRetryDescriptor,
   TaskReportStatus,
   TaskStatus,
   createTaskFromFile,
@@ -23,6 +24,19 @@ import {
   getOutputName,
   mapBackendTaskStatus
 } from "./taskUtils";
+import {
+  TaskQueueFilter,
+  buildFailedTaskSummary,
+  cloneTaskForRetry,
+  filterTasks,
+  isRetryableFailure,
+  isTerminalTask,
+  removeTerminalTasks,
+  summarizeTasks,
+  taskOperationLabel,
+  taskQueueFilterLabels,
+  unavailableRetryTaskNames
+} from "./taskQueue";
 import {
   BuiltInPresetId,
   EnabledImageFormat,
@@ -330,7 +344,7 @@ const maxResizeDimension = 16_384;
 const maxResizePixels = 64_000_000;
 const minCompressionQuality = 40;
 const maxCompressionQuality = 95;
-const appVersion = "0.8.0";
+const appVersion = "0.9.0";
 
 const fallbackSelfCheck: EngineSelfCheck = {
   platform: "桌面预览",
@@ -372,6 +386,13 @@ const statusLabels: Record<TaskStatus, string> = {
   cancelled: "已取消"
 };
 
+function taskStatusLabel(task: LocalTask): string {
+  if (task.reportStatus === "not_smaller") return "未变小";
+  if (task.reportStatus === "skipped") return "已跳过";
+  if (task.reportStatus === "unsupported") return "不支持";
+  return statusLabels[task.status];
+}
+
 const outputNameExample = [
   getOutputName("report.pdf", []),
   getOutputName("report.pdf", ["report.pdf"]),
@@ -411,7 +432,9 @@ function createBackendTaskId(operation: string, taskId: string): string {
 function startTaskOperation(
   task: LocalTask,
   operationType: string,
-  startedAt: number
+  startedAt: number,
+  retryDescriptor?: TaskRetryDescriptor,
+  retryGroupId?: string
 ): LocalTask {
   return {
     ...task,
@@ -426,7 +449,9 @@ function startTaskOperation(
     reportSavedBytes: undefined,
     reportSavedPercent: undefined,
     reportMessage: undefined,
-    outputLocationPath: undefined
+    outputLocationPath: undefined,
+    retryDescriptor: retryDescriptor ?? task.retryDescriptor,
+    retryGroupId: retryGroupId ?? task.retryGroupId
   };
 }
 
@@ -452,24 +477,6 @@ function finishTaskOperation(
     reportMessage: completion.message,
     outputLocationPath:
       completion.outputLocationPath ?? completion.outputPath ?? undefined
-  };
-}
-
-function clearTaskReport(task: LocalTask): LocalTask {
-  return {
-    ...task,
-    operationType: undefined,
-    startedAt: undefined,
-    finishedAt: undefined,
-    reportStatus: undefined,
-    reportOutputPath: undefined,
-    reportOutputName: undefined,
-    reportOutputExtension: undefined,
-    reportOutputBytes: undefined,
-    reportSavedBytes: undefined,
-    reportSavedPercent: undefined,
-    reportMessage: undefined,
-    outputLocationPath: undefined
   };
 }
 
@@ -694,6 +701,11 @@ function App() {
   const [copiedTaskId, setCopiedTaskId] = useState("");
   const [showClearHistoryConfirmation, setShowClearHistoryConfirmation] =
     useState(false);
+  const [showClearCompletedConfirmation, setShowClearCompletedConfirmation] =
+    useState(false);
+  const [queueFilter, setQueueFilter] = useState<TaskQueueFilter>("all");
+  const [queueSearch, setQueueSearch] = useState("");
+  const [queueMessage, setQueueMessage] = useState("");
   const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(
     () => new Set()
   );
@@ -894,6 +906,34 @@ function App() {
         .map(buildTaskReportRecord)
         .filter((record): record is TaskReportRecord => record !== null),
     [tasks]
+  );
+  const queueSummary = useMemo(() => summarizeTasks(tasks), [tasks]);
+  const visibleTasks = useMemo(
+    () => filterTasks(tasks, queueFilter, queueSearch),
+    [queueFilter, queueSearch, tasks]
+  );
+  const visibleTaskIds = useMemo(
+    () => new Set(visibleTasks.map((task) => task.taskId)),
+    [visibleTasks]
+  );
+  const filteredReportRecords = useMemo(
+    () =>
+      reportRecords.filter((record) => visibleTaskIds.has(record.taskId)),
+    [reportRecords, visibleTaskIds]
+  );
+  const retryableFailedTasks = useMemo(
+    () => tasks.filter(isRetryableFailure),
+    [tasks]
+  );
+  const failedSummaryTasks = useMemo(
+    () =>
+      visibleTasks.filter(
+        (task) =>
+          task.reportStatus === "failed" ||
+          task.reportStatus === "unsupported" ||
+          (!task.reportStatus && task.status === "failed")
+      ),
+    [visibleTasks]
   );
 
   const selectedTaskWithError = tasks.find((task) => task.errorLog);
@@ -1785,8 +1825,11 @@ function App() {
     }
   }
 
-  async function exportTaskReport() {
-    if (reportRecords.length === 0) {
+  async function exportTaskReport(
+    records: TaskReportRecord[] = reportRecords,
+    filtered = false
+  ) {
+    if (records.length === 0) {
       setReportExportMessage("");
       setReportExportError("没有可导出的任务结果。");
       return;
@@ -1808,7 +1851,7 @@ function App() {
         return;
       }
       const reportName = reportFilename(reportFormat, generatedAt);
-      const nativeReportSource = reportRecords.find((record) =>
+      const nativeReportSource = records.find((record) =>
         Boolean(record.sourcePath)
       )?.sourcePath;
       let destinationPath: string | null = null;
@@ -1852,12 +1895,12 @@ function App() {
           format: reportFormat,
           appVersion,
           generatedAt: generatedAt.toISOString(),
-          tasks: reportRecords
+          tasks: records
         }
       });
 
       setReportExportMessage(
-        `${result.message}：${result.destinationPath}（${result.taskCount} 条，${formatBytes(result.bytesWritten)}）`
+        `${filtered ? "当前筛选结果已导出。" : ""}${result.message}：${result.destinationPath}（${result.taskCount} 条，${formatBytes(result.bytesWritten)}）`
       );
       setLastReportPath(result.destinationPath);
     } catch (error) {
@@ -1947,6 +1990,26 @@ function App() {
     }
   }
 
+  async function copyVisibleFailedSummary() {
+    const summaryText = buildFailedTaskSummary(failedSummaryTasks);
+    if (!summaryText) {
+      setQueueMessage("当前筛选结果中没有可复制的失败摘要。");
+      return;
+    }
+
+    try {
+      const result = await invoke<CopyErrorSummaryResult>(
+        "copy_failed_task_summary",
+        { message: summaryText }
+      );
+      setQueueMessage(
+        `${result.message} ${failedSummaryTasks.length} 条失败摘要；仅含文件名，不含完整本地路径。`
+      );
+    } catch (error) {
+      setQueueMessage(`复制失败摘要失败：${String(error)}`);
+    }
+  }
+
   function handleImageTargetChange(event: ChangeEvent<HTMLSelectElement>) {
     const targetFormat = event.currentTarget.value as EnabledImageFormat;
     setImageTargetFormat(targetFormat);
@@ -1998,19 +2061,151 @@ function App() {
     addPreviewFiles(event.dataTransfer.files);
   }
 
-  function retryTask(taskId: string) {
-    cancelledTaskIdsRef.current.delete(taskId);
-    setTasks((currentTasks) =>
-      currentTasks.map((task) =>
-        task.taskId === taskId
-          ? clearTaskReport({
+  async function retryFailedTasks(taskIds?: string[]) {
+    const requestedIds = taskIds ? new Set(taskIds) : null;
+    const candidates = tasks.filter(
+      (task) =>
+        isRetryableFailure(task) &&
+        (!requestedIds || requestedIds.has(task.taskId))
+    );
+    if (candidates.length === 0) {
+      setQueueMessage("当前没有保留完整操作参数的失败任务可重试。");
+      return;
+    }
+
+    const processedMergeGroups = new Set<string>();
+    let startedCount = 0;
+    let missingCount = 0;
+
+    for (const original of candidates) {
+      const descriptor = original.retryDescriptor;
+      if (!descriptor) {
+        continue;
+      }
+
+      let retryTasks: LocalTask[];
+      if (descriptor.kind === "pdf-merge") {
+        const mergeKey = original.retryGroupId ?? JSON.stringify(descriptor);
+        if (processedMergeGroups.has(mergeKey)) {
+          continue;
+        }
+        processedMergeGroups.add(mergeKey);
+        retryTasks = descriptor.sources.map((source, index) => {
+          const matchingOriginal = tasks.find(
+            (task) =>
+              task.retryGroupId === original.retryGroupId &&
+              task.sourcePath === source.sourcePath
+          );
+          return cloneTaskForRetry(
+            matchingOriginal ?? {
+              ...original,
+              taskId: `${original.taskId}-source-${index}`,
+              sourcePath: source.sourcePath,
+              sourcePreview: source.sourcePath,
+              sourceKind: "native-path",
+              displayName: source.displayName,
+              extension: source.extension,
+              size: source.size
+            },
+            Date.now() + index
+          );
+        });
+      } else {
+        retryTasks = [cloneTaskForRetry(original)];
+      }
+
+      const paths = retryTasks
+        .map((task) => task.sourcePath ?? "")
+        .filter(Boolean);
+      let inspection: NativePathInspection | null = null;
+      try {
+        inspection = await invoke<NativePathInspection>("inspect_native_paths", {
+          request: { paths }
+        });
+      } catch {
+        inspection = null;
+      }
+
+      const missingNames = unavailableRetryTaskNames(
+        retryTasks,
+        inspection?.files.map((file) => file.sourcePath) ?? []
+      );
+
+      if (missingNames.length > 0) {
+        const finishedAt = Date.now();
+        const message = `无法重试：源文件已不存在或不可访问：${missingNames.join("、")}。未启动本地处理引擎。`;
+        const failedRetries = retryTasks.map((task) =>
+          finishTaskOperation(
+            {
+              ...startTaskOperation(
+                task,
+                original.operationType ?? "retry_validation",
+                finishedAt,
+                descriptor
+              ),
+              status: "failed",
+              errorLog: message
+            },
+            { status: "failed", message },
+            finishedAt
+          )
+        );
+        setTasks((currentTasks) => [...failedRetries, ...currentTasks]);
+        missingCount += failedRetries.length;
+        continue;
+      }
+
+      retryTasks = retryTasks.map((task) => {
+        const metadata = inspection?.files.find(
+          (file) => file.sourcePath === task.sourcePath
+        );
+        return metadata
+          ? {
               ...task,
-              backendTaskId: undefined,
-              status: "waiting",
-              errorLog: ""
-            })
-          : task
-      )
+              displayName: metadata.displayName,
+              extension: metadata.extension,
+              size: metadata.size,
+              sourcePreview: metadata.sourcePath
+            }
+          : task;
+      });
+      for (const task of retryTasks) {
+        cancelledTaskIdsRef.current.delete(task.taskId);
+      }
+      setTasks((currentTasks) => [...retryTasks, ...currentTasks]);
+      setSelectedTaskIds(new Set(retryTasks.map((task) => task.taskId)));
+      startedCount += retryTasks.length;
+
+      switch (descriptor.kind) {
+        case "pdf-merge":
+          await mergePdfTasks(retryTasks);
+          break;
+        case "pdf-split":
+          await splitPdfTask(retryTasks[0]);
+          break;
+        case "pdf-extract":
+          await extractPdfPages(retryTasks[0], descriptor.pages);
+          break;
+        case "pdf-rotate":
+          await rotatePdfTask(retryTasks[0], descriptor.degrees);
+          break;
+        case "image-convert":
+          await convertSelectedImages(retryTasks, descriptor.targetFormat);
+          break;
+        case "image-resize":
+          await resizeSelectedImages(retryTasks, descriptor);
+          break;
+        case "image-compress":
+          await compressSelectedImages(retryTasks, descriptor);
+          break;
+        case "image-clean-metadata":
+          await cleanSelectedImageMetadata(retryTasks);
+          break;
+      }
+    }
+
+    setQueueMessage(
+      `失败项重试已处理：新建 ${startedCount + missingCount} 个任务，已启动 ${startedCount} 个，源文件不可用 ${missingCount} 个。旧失败记录已保留。`
     );
   }
 
@@ -2147,14 +2342,20 @@ function App() {
   }
 
   function clearCompletedTasks() {
+    if (!tasks.some(isTerminalTask)) {
+      setQueueMessage("当前没有可清除的已结束任务。");
+      return;
+    }
+    setShowClearCompletedConfirmation(true);
+  }
+
+  function confirmClearCompletedTasks() {
     const completedTaskIds = new Set(
       tasks
-        .filter((task) => task.status === "completed")
+        .filter(isTerminalTask)
         .map((task) => task.taskId)
     );
-    setTasks((currentTasks) =>
-      currentTasks.filter((task) => task.status !== "completed")
-    );
+    setTasks((currentTasks) => removeTerminalTasks(currentTasks));
     setSelectedTaskIds((currentIds) => {
       const nextIds = new Set(currentIds);
       for (const taskId of completedTaskIds) {
@@ -2162,6 +2363,10 @@ function App() {
       }
       return nextIds;
     });
+    setShowClearCompletedConfirmation(false);
+    setQueueMessage(
+      `已从当前会话清除 ${completedTaskIds.size} 条已结束任务；等待中和处理中任务未受影响，也未删除任何本地文件。`
+    );
   }
 
   function clearTaskHistory() {
@@ -2184,9 +2389,20 @@ function App() {
     setFolderMessage("已清空当前界面记录，未删除任何源文件、输出文件或报告。");
   }
 
-  async function mergePdfTasks() {
-    const mergeTasks = selectedRealLocalPdfTasks;
-    if (!canMergeSelectedPdfs) {
+  async function mergePdfTasks(explicitTasks?: LocalTask[]) {
+    const mergeTasks = explicitTasks ?? selectedRealLocalPdfTasks;
+    const mergeTasksAreValid =
+      qpdfAvailable &&
+      mergeTasks.length >= 2 &&
+      mergeTasks.every(
+        (task) =>
+          task.extension === "pdf" &&
+          task.sourceKind === "native-path" &&
+          Boolean(task.sourcePath) &&
+          task.status !== "converting" &&
+          task.status !== "cancelled"
+      );
+    if (!(explicitTasks ? mergeTasksAreValid : canMergeSelectedPdfs)) {
       setFolderMessage(pdfToolsGuidance());
       return;
     }
@@ -2204,6 +2420,15 @@ function App() {
       "qpdf-merge",
       mergeTasks[0].taskId
     );
+    const retryDescriptor: TaskRetryDescriptor = {
+      kind: "pdf-merge",
+      sources: mergeTasks.map((task) => ({
+        sourcePath: task.sourcePath ?? "",
+        displayName: task.displayName,
+        extension: task.extension,
+        size: task.size
+      }))
+    };
     for (const taskId of taskIds) {
       cancelledTaskIdsRef.current.delete(taskId);
     }
@@ -2212,7 +2437,13 @@ function App() {
       currentTasks.map((task) =>
         taskIds.has(task.taskId)
           ? {
-              ...startTaskOperation(task, "pdf_merge", startedAt),
+              ...startTaskOperation(
+                task,
+                "pdf_merge",
+                startedAt,
+                retryDescriptor,
+                backendTaskId
+              ),
               backendTaskId,
               status: "converting",
               errorLog: ""
@@ -2345,7 +2576,9 @@ function App() {
       currentTasks.map((currentTask) =>
         currentTask.taskId === task.taskId
           ? {
-              ...startTaskOperation(currentTask, "pdf_split", startedAt),
+              ...startTaskOperation(currentTask, "pdf_split", startedAt, {
+                kind: "pdf-split"
+              }),
               backendTaskId,
               status: "converting",
               errorLog: ""
@@ -2453,7 +2686,7 @@ function App() {
     }
   }
 
-  async function extractPdfPages(task: LocalTask) {
+  async function extractPdfPages(task: LocalTask, retryPages?: string) {
     if (!canExtractPdfTask(task) || !task.sourcePath) {
       setFolderMessage(
         "PDF 页面提取需要内置 qpdf 和 1 个带真实路径的本地 PDF。"
@@ -2469,7 +2702,7 @@ function App() {
       return;
     }
 
-    const pages = extractPageRange.trim();
+    const pages = retryPages?.trim() ?? extractPageRange.trim();
     if (!pages) {
       setFolderMessage("请输入要提取的页面范围，例如 1,3,5-7。");
       return;
@@ -2482,7 +2715,12 @@ function App() {
       currentTasks.map((currentTask) =>
         currentTask.taskId === task.taskId
           ? {
-              ...startTaskOperation(currentTask, "pdf_extract_pages", startedAt),
+              ...startTaskOperation(
+                currentTask,
+                "pdf_extract_pages",
+                startedAt,
+                { kind: "pdf-extract", pages }
+              ),
               backendTaskId,
               status: "converting",
               errorLog: ""
@@ -2609,7 +2847,10 @@ function App() {
       currentTasks.map((currentTask) =>
         currentTask.taskId === task.taskId
           ? {
-              ...startTaskOperation(currentTask, "pdf_rotate", startedAt),
+              ...startTaskOperation(currentTask, "pdf_rotate", startedAt, {
+                kind: "pdf-rotate",
+                degrees
+              }),
               backendTaskId,
               status: "converting",
               errorLog: ""
@@ -2714,8 +2955,25 @@ function App() {
     }
   }
 
-  async function convertSelectedImages() {
-    if (!canConvertSelectedImages) {
+  async function convertSelectedImages(
+    explicitTasks?: LocalTask[],
+    retryTargetFormat?: EnabledImageFormat
+  ) {
+    const conversionTasks = explicitTasks ?? selectedRealLocalImageTasks;
+    const targetFormat = retryTargetFormat ?? imageTargetFormat;
+    const explicitTasksAreValid =
+      imageEngineAvailable &&
+      conversionTasks.length > 0 &&
+      conversionTasks.every(
+        (task) =>
+          isEnabledImageExtension(task.extension) &&
+          task.sourceKind === "native-path" &&
+          Boolean(task.sourcePath) &&
+          task.status !== "converting" &&
+          task.status !== "cancelled" &&
+          canonicalImageFormat(task.extension) !== targetFormat
+      );
+    if (!(explicitTasks ? explicitTasksAreValid : canConvertSelectedImages)) {
       setFolderMessage(imageToolsGuidance());
       return;
     }
@@ -2727,9 +2985,6 @@ function App() {
     if (selectedOutputFolder === null) {
       return;
     }
-
-    const conversionTasks = selectedRealLocalImageTasks;
-    const targetFormat = imageTargetFormat;
 
     let successCount = 0;
     let failureCount = 0;
@@ -2760,7 +3015,8 @@ function App() {
                 ...startTaskOperation(
                   currentTask,
                   "image_convert",
-                  startedAt
+                  startedAt,
+                  { kind: "image-convert", targetFormat }
                 ),
                 backendTaskId,
                 status: "converting",
@@ -2889,8 +3145,37 @@ function App() {
     }
   }
 
-  async function resizeSelectedImages() {
-    if (!canResizeSelectedImages) {
+  async function resizeSelectedImages(
+    explicitTasks?: LocalTask[],
+    retryDimensions?: {
+      mode: ResizeMode;
+      maxWidth?: number;
+      maxHeight?: number;
+    }
+  ) {
+    const resizeTasks = explicitTasks ?? selectedRealLocalImageTasks;
+    const mode = retryDimensions?.mode ?? resizeMode;
+    const dimensions = retryDimensions
+      ? {
+          valid: true,
+          maxWidth: retryDimensions.maxWidth,
+          maxHeight: retryDimensions.maxHeight,
+          message: ""
+        }
+      : validateResizeInputs(mode, resizeWidth, resizeHeight);
+    const explicitTasksAreValid =
+      imageEngineAvailable &&
+      dimensions.valid &&
+      resizeTasks.length > 0 &&
+      resizeTasks.every(
+        (task) =>
+          isEnabledImageExtension(task.extension) &&
+          task.sourceKind === "native-path" &&
+          Boolean(task.sourcePath) &&
+          task.status !== "converting" &&
+          task.status !== "cancelled"
+      );
+    if (!(explicitTasks ? explicitTasksAreValid : canResizeSelectedImages)) {
       setFolderMessage(imageResizeGuidance());
       return;
     }
@@ -2903,9 +3188,6 @@ function App() {
       return;
     }
 
-    const resizeTasks = selectedRealLocalImageTasks;
-    const mode = resizeMode;
-    const dimensions = validateResizeInputs(mode, resizeWidth, resizeHeight);
     if (!dimensions.valid) {
       setFolderMessage(dimensions.message);
       return;
@@ -2935,7 +3217,12 @@ function App() {
         currentTasks.map((currentTask) =>
           currentTask.taskId === task.taskId
             ? {
-                ...startTaskOperation(currentTask, "image_resize", startedAt),
+              ...startTaskOperation(currentTask, "image_resize", startedAt, {
+                kind: "image-resize",
+                mode,
+                maxWidth: dimensions.maxWidth,
+                maxHeight: dimensions.maxHeight
+              }),
                 backendTaskId,
                 status: "converting",
                 errorLog: ""
@@ -3068,8 +3355,29 @@ function App() {
     }
   }
 
-  async function compressSelectedImages() {
-    if (!canCompressSelectedImages) {
+  async function compressSelectedImages(
+    explicitTasks?: LocalTask[],
+    retryQualities?: { jpegQuality: number; webpQuality: number }
+  ) {
+    const compressionTasks = explicitTasks ?? selectedRealLocalImageTasks;
+    const jpegQuality =
+      retryQualities?.jpegQuality ?? jpegQualityValidation.value;
+    const webpQuality =
+      retryQualities?.webpQuality ?? webpQualityValidation.value;
+    const explicitTasksAreValid =
+      imageEngineAvailable &&
+      compressionTasks.length > 0 &&
+      jpegQuality !== undefined &&
+      webpQuality !== undefined &&
+      compressionTasks.every(
+        (task) =>
+          isEnabledImageExtension(task.extension) &&
+          task.sourceKind === "native-path" &&
+          Boolean(task.sourcePath) &&
+          task.status !== "converting" &&
+          task.status !== "cancelled"
+      );
+    if (!(explicitTasks ? explicitTasksAreValid : canCompressSelectedImages)) {
       setFolderMessage(imageCompressionGuidance());
       return;
     }
@@ -3082,9 +3390,6 @@ function App() {
       return;
     }
 
-    const compressionTasks = selectedRealLocalImageTasks;
-    const jpegQuality = jpegQualityValidation.value;
-    const webpQuality = webpQualityValidation.value;
     let publishedCount = 0;
     let notSmallerCount = 0;
     let failureCount = 0;
@@ -3120,7 +3425,12 @@ function App() {
                 ...startTaskOperation(
                   currentTask,
                   "image_compress",
-                  startedAt
+                  startedAt,
+                  {
+                    kind: "image-compress",
+                    jpegQuality: jpegQuality ?? 82,
+                    webpQuality: webpQuality ?? 80
+                  }
                 ),
                 backendTaskId,
                 status: "converting",
@@ -3264,8 +3574,20 @@ function App() {
     }
   }
 
-  async function cleanSelectedImageMetadata() {
-    if (!canCleanSelectedImageMetadata) {
+  async function cleanSelectedImageMetadata(explicitTasks?: LocalTask[]) {
+    const cleanupTasks = explicitTasks ?? selectedRealLocalImageTasks;
+    const explicitTasksAreValid =
+      imageEngineAvailable &&
+      cleanupTasks.length > 0 &&
+      cleanupTasks.every(
+        (task) =>
+          isEnabledImageExtension(task.extension) &&
+          task.sourceKind === "native-path" &&
+          Boolean(task.sourcePath) &&
+          task.status !== "converting" &&
+          task.status !== "cancelled"
+      );
+    if (!(explicitTasks ? explicitTasksAreValid : canCleanSelectedImageMetadata)) {
       setFolderMessage(imageMetadataCleanupGuidance());
       return;
     }
@@ -3278,7 +3600,6 @@ function App() {
       return;
     }
 
-    const cleanupTasks = selectedRealLocalImageTasks;
     let publishedCount = 0;
     let noMetadataCount = 0;
     let failureCount = 0;
@@ -3306,7 +3627,8 @@ function App() {
                 ...startTaskOperation(
                   currentTask,
                   "image_metadata_cleanup",
-                  startedAt
+                  startedAt,
+                  { kind: "image-clean-metadata" }
                 ),
                 backendTaskId,
                 status: "converting",
@@ -3556,9 +3878,9 @@ function App() {
                 type="button"
                 className="secondary-button"
                 onClick={clearCompletedTasks}
-                disabled={summary.completed === 0}
+                disabled={!tasks.some(isTerminalTask)}
               >
-                清除已完成
+                清除已完成任务
               </button>
               <button
                 type="button"
@@ -4017,7 +4339,66 @@ function App() {
                   {tasks.length} 个任务 · {realLocalPdfTasks.length} 个本地 PDF · {realLocalImageTasks.length} 张本地图片 · {selectedTasks.length} 个已选
                 </span>
               </div>
+              <div className="queue-bulk-actions">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => void retryFailedTasks()}
+                  disabled={retryableFailedTasks.length === 0}
+                  title="保留旧失败记录，以新任务 ID 和原操作参数重试。"
+                >
+                  重试失败项 ({retryableFailedTasks.length})
+                </button>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => void copyVisibleFailedSummary()}
+                  disabled={failedSummaryTasks.length === 0}
+                  title="仅复制当前筛选结果中的操作、文件名、精简错误和时间。"
+                >
+                  复制失败摘要
+                </button>
+              </div>
             </div>
+
+            <div className="queue-controls">
+              <label className="queue-search">
+                <span>搜索任务</span>
+                <input
+                  type="search"
+                  value={queueSearch}
+                  placeholder="文件名、输出名或操作"
+                  onChange={(event) => setQueueSearch(event.currentTarget.value)}
+                />
+              </label>
+              <div className="queue-filters" aria-label="任务筛选">
+                {(Object.keys(taskQueueFilterLabels) as TaskQueueFilter[]).map(
+                  (filter) => (
+                    <button
+                      type="button"
+                      className={queueFilter === filter ? "is-active" : ""}
+                      aria-pressed={queueFilter === filter}
+                      key={filter}
+                      onClick={() => setQueueFilter(filter)}
+                    >
+                      {taskQueueFilterLabels[filter]}
+                    </button>
+                  )
+                )}
+              </div>
+            </div>
+
+            <div className="queue-counters" aria-label="队列结果计数">
+              <span>总数 <strong>{queueSummary.total}</strong></span>
+              <span>处理中 <strong>{queueSummary.running}</strong></span>
+              <span>成功 <strong>{queueSummary.success}</strong></span>
+              <span>失败 <strong>{queueSummary.failed}</strong></span>
+              <span>取消 <strong>{queueSummary.cancelled}</strong></span>
+              <span>跳过 / 未变小 <strong>{queueSummary.skipped}</strong></span>
+            </div>
+            {queueMessage ? (
+              <p className="queue-message" role="status">{queueMessage}</p>
+            ) : null}
 
             {tasks.length === 0 ? (
               <div className="empty-state">
@@ -4029,6 +4410,11 @@ function App() {
                   <li>任务完成后可以导出 CSV 或 JSON 报告。</li>
                 </ul>
               </div>
+            ) : visibleTasks.length === 0 ? (
+              <div className="empty-state queue-empty-filter">
+                <h3>没有符合条件的任务</h3>
+                <p>调整筛选条件或搜索关键词，任务记录仍保留在当前会话中。</p>
+              </div>
             ) : (
               <div className="task-table" role="table" aria-label="本地任务">
                 <div className="task-table-head" role="row">
@@ -4038,7 +4424,7 @@ function App() {
                   <span>输出预览</span>
                   <span>操作</span>
                 </div>
-                {tasks.map((task) => (
+                {visibleTasks.map((task) => (
                   <article className="task-row" role="row" key={task.taskId}>
                     <label className="select-cell" aria-label={`选择 ${task.displayName}`}>
                       <input
@@ -4050,11 +4436,11 @@ function App() {
                     <div className="file-cell">
                       <strong>{task.displayName}</strong>
                       <span>
-                        {task.extension.toUpperCase()} · {formatBytes(task.size)}
+                        {task.extension.toUpperCase()} · {formatBytes(task.size)} · {taskOperationLabel(task)}
                       </span>
                     </div>
                     <span className={`status-chip status-${task.status}`}>
-                      {statusLabels[task.status]}
+                      {taskStatusLabel(task)}
                     </span>
                     <div className="output-cell" title={task.outputPreview}>
                       <span>{task.outputPreview}</span>
@@ -4108,8 +4494,13 @@ function App() {
                       <button
                         type="button"
                         className="small-button"
-                        onClick={() => retryTask(task.taskId)}
-                        disabled={task.status !== "failed"}
+                        onClick={() => void retryFailedTasks([task.taskId])}
+                        disabled={!isRetryableFailure(task)}
+                        title={
+                          isRetryableFailure(task)
+                            ? "以新任务 ID 和原操作参数重试，旧记录会保留。"
+                            : "仅支持重试保留了完整操作参数的失败任务。"
+                        }
                       >
                         重试
                       </button>
@@ -4376,6 +4767,18 @@ function App() {
             >
               {reportExporting ? "正在导出..." : "导出报告"}
             </button>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() =>
+                void exportTaskReport(filteredReportRecords, true)
+              }
+              disabled={
+                filteredReportRecords.length === 0 || reportExporting
+              }
+            >
+              导出当前筛选结果 ({filteredReportRecords.length})
+            </button>
             {lastReportPath ? (
               <div className="report-location">
                 <span title={lastReportPath}>
@@ -4445,6 +4848,40 @@ function App() {
           </section>
         </aside>
       </div>
+      {showClearCompletedConfirmation ? (
+        <div className="confirmation-overlay">
+          <section
+            className="confirmation-dialog"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="clear-completed-title"
+            aria-describedby="clear-completed-description"
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                setShowClearCompletedConfirmation(false);
+              }
+            }}
+          >
+            <h2 id="clear-completed-title">清除已完成任务？</h2>
+            <p id="clear-completed-description">
+              将清除当前会话中的成功、失败、取消、跳过和未变小记录。等待中和处理中任务不会被清除，也不会删除任何本地文件。
+            </p>
+            <div className="confirmation-actions">
+              <button
+                type="button"
+                className="secondary-button"
+                autoFocus
+                onClick={() => setShowClearCompletedConfirmation(false)}
+              >
+                取消
+              </button>
+              <button type="button" onClick={confirmClearCompletedTasks}>
+                确认清除
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
       {showClearHistoryConfirmation ? (
         <div className="confirmation-overlay">
           <section

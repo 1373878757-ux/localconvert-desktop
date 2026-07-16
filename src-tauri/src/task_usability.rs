@@ -8,6 +8,7 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_opener::OpenerExt;
 
 const MAX_ERROR_SUMMARY_CHARS: usize = 320;
+const MAX_FAILED_SUMMARY_CHARS: usize = 8_000;
 const FALLBACK_ERROR_SUMMARY: &str = "任务未完成。请在应用内查看错误日志。";
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -53,6 +54,24 @@ pub(crate) fn copy_error_summary(
     message: String,
 ) -> Result<CopyErrorSummaryResult, String> {
     let summary = concise_error_summary(&message);
+
+    app.clipboard()
+        .write_text(summary.clone())
+        .map_err(|error| format!("剪贴板当前不可用：{error}"))?;
+
+    Ok(CopyErrorSummaryResult {
+        success: true,
+        summary,
+        message: "已复制",
+    })
+}
+
+#[tauri::command]
+pub(crate) fn copy_failed_task_summary(
+    app: AppHandle,
+    message: String,
+) -> Result<CopyErrorSummaryResult, String> {
+    let summary = safe_failed_task_summary(&message);
 
     app.clipboard()
         .write_text(summary.clone())
@@ -123,6 +142,60 @@ fn concise_error_summary(raw_message: &str) -> String {
     }
 
     truncate_summary(&normalized)
+}
+
+fn safe_failed_task_summary(raw_message: &str) -> String {
+    let summary = raw_message
+        .lines()
+        .map(str::trim)
+        .filter(|line| !is_diagnostic_or_raw_metadata_line(line))
+        .map(strip_inline_raw_metadata)
+        .map(redact_private_path_suffix)
+        .map(|line| {
+            line.chars()
+                .filter(|character| !character.is_control())
+                .collect::<String>()
+        })
+        .filter(|line| !line.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    if summary.is_empty() {
+        return FALLBACK_ERROR_SUMMARY.to_string();
+    }
+
+    truncate_to_chars(&summary, MAX_FAILED_SUMMARY_CHARS)
+}
+
+fn redact_private_path_suffix(line: &str) -> String {
+    let unix_path = ["/Users/", "/home/"]
+        .iter()
+        .filter_map(|marker| line.find(marker))
+        .min();
+    let windows_path = line
+        .char_indices()
+        .collect::<Vec<_>>()
+        .windows(3)
+        .find_map(|window| {
+            let [(start, drive), (_, colon), (_, slash)] = window else {
+                return None;
+            };
+            (drive.is_ascii_alphabetic() && *colon == ':' && (*slash == '\\' || *slash == '/'))
+                .then_some(*start)
+        });
+    let path_start = unix_path.into_iter().chain(windows_path).min();
+
+    match path_start {
+        Some(index) => format!("{}[本地路径已隐藏]", line[..index].trim_end()),
+        None => line.to_string(),
+    }
+}
+
+fn truncate_to_chars(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+    value.chars().take(max_chars).collect::<String>()
 }
 
 fn is_diagnostic_or_raw_metadata_line(line: &str) -> bool {
@@ -291,5 +364,28 @@ mod tests {
 
         assert_eq!(summary.chars().count(), MAX_ERROR_SUMMARY_CHARS);
         assert!(summary.ends_with('…'));
+    }
+
+    #[test]
+    fn failed_task_summary_keeps_structure_and_redacts_private_paths() {
+        let message = concat!(
+            "1. 图片格式转换\n",
+            "文件：示例.jpg\n",
+            "错误：无法读取 /Users/private/示例.jpg\n",
+            "时间：2026/7/17 10:00:00\n\n",
+            "2. 合并 PDF\n",
+            "文件：report.pdf\n",
+            "错误：C:\\Private\\report.pdf 无法打开\n",
+            "EXIF: secret payload\n"
+        );
+
+        let summary = safe_failed_task_summary(message);
+
+        assert!(summary.contains("图片格式转换"));
+        assert!(summary.contains("合并 PDF"));
+        assert!(summary.contains("[本地路径已隐藏]"));
+        assert!(!summary.contains("/Users/private"));
+        assert!(!summary.contains("C:\\Private"));
+        assert!(!summary.contains("secret payload"));
     }
 }

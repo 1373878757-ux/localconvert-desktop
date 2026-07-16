@@ -30,6 +30,28 @@ export type NativePathMetadata = {
   sourceKind: "native-path";
 };
 
+export type RetrySourceSnapshot = {
+  sourcePath: string;
+  displayName: string;
+  extension: string;
+  size: number;
+};
+
+export type TaskRetryDescriptor =
+  | { kind: "pdf-merge"; sources: RetrySourceSnapshot[] }
+  | { kind: "pdf-split" }
+  | { kind: "pdf-extract"; pages: string }
+  | { kind: "pdf-rotate"; degrees: 90 | 180 | -90 }
+  | { kind: "image-convert"; targetFormat: "jpg" | "png" | "webp" }
+  | {
+      kind: "image-resize";
+      mode: "fit" | "width" | "height";
+      maxWidth?: number;
+      maxHeight?: number;
+    }
+  | { kind: "image-compress"; jpegQuality: number; webpQuality: number }
+  | { kind: "image-clean-metadata" };
+
 export type LocalTask = {
   taskId: string;
   backendTaskId?: string;
@@ -55,6 +77,8 @@ export type LocalTask = {
   reportSavedPercent?: number;
   reportMessage?: string;
   outputLocationPath?: string;
+  retryDescriptor?: TaskRetryDescriptor;
+  retryGroupId?: string;
 };
 
 export function getExtension(fileName: string): string {
@@ -134,7 +158,7 @@ export function createTaskFromFile(
   const outputName = getOutputName(desiredOutputName, existingOutputNames);
 
   return {
-    taskId: createTaskId(now),
+    taskId: createLocalTaskId(now),
     displayName,
     size: file.size,
     extension: getExtension(displayName),
@@ -158,7 +182,7 @@ export function createTaskFromNativePathMetadata(
   const outputName = getOutputName(desiredOutputName, existingOutputNames);
 
   return {
-    taskId: createTaskId(now),
+    taskId: createLocalTaskId(now),
     displayName,
     size: metadata.size,
     extension: metadata.extension || getExtension(displayName),
@@ -172,6 +196,6 @@ export function createTaskFromNativePathMetadata(
   };
 }
 
-function createTaskId(now: number): string {
+export function createLocalTaskId(now = Date.now()): string {
   return `${now}-${Math.random().toString(36).slice(2, 9)}`;
 }

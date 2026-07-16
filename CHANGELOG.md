@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Preview 0.9.0 - Batch Task Queue Management
+
+- Aligned npm, Cargo, Tauri, and in-app version metadata to `0.9.0` for the current development line; the latest public release remains Preview 0.8.0.
+- Added compact task filters, filename/operation search, and queue counters for running, successful, failed, cancelled, skipped, and not-smaller outcomes.
+- Added failed-item retry that preserves the original operation parameters, creates new task IDs, keeps old failed records, and reapplies the current safe output rules.
+- Added graceful missing-source retry failures without starting sidecars, plus redacted multi-task failed-summary copying that omits full private paths and raw metadata payloads.
+- Added confirmed cleanup for all terminal task records while preserving running tasks, source files, outputs, reports, cancellation, and atomic publication behavior.
+- Added current-filter CSV/JSON report export using the existing report schema and serialization path.
+- Kept the task queue session-scoped and added no engine, format, platform, upload, cloud, server, telemetry, or network capability.
+
 ## Preview 0.8.0 - 2026-07-17
 
 - Released the macOS Apple Silicon prerelease with npm, Cargo, Tauri, and in-app version metadata aligned to `0.8.0`.
