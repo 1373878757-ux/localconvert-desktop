@@ -4,7 +4,7 @@
 
 > 让可能发生在这儿。
 
-LocalConvert Desktop 是一款面向普通办公用户的纯本地桌面文件转换工具。它把 PDF 结构处理、JPG/PNG/WebP 图片转换与处理、批量任务状态和报告导出放在同一个克制的桌面工作台中；文件不上传，不依赖转换服务器，原文件默认不会被覆盖。当前稳定基线为 [Preview 0.6.1](https://github.com/1373878757-ux/localconvert-desktop/releases/tag/preview-0.6.1-task-usability-macos)，公开构建面向 macOS Apple Silicon，尚未完成 Developer ID 签名与 Apple 公证。
+LocalConvert Desktop 是一款面向普通办公用户的纯本地桌面文件转换工具。它把 PDF 结构处理、JPG/PNG/WebP 图片转换与处理、批量任务状态和报告导出放在同一个克制的桌面工作台中；文件不上传，不依赖转换服务器，原文件默认不会被覆盖。当前稳定基线为 [Preview 0.7.0](https://github.com/1373878757-ux/localconvert-desktop/releases/tag/preview-0.7.0-preferences-presets-macos)，公开构建面向 macOS Apple Silicon，尚未完成 Developer ID 签名与 Apple 公证。
 
 面向非技术读者的精简介绍见 [一页作品集简介](portfolio-brief.md)。
 
@@ -28,6 +28,8 @@ LocalConvert Desktop 是一款面向普通办公用户的纯本地桌面文件�
 | 安全输出 | 任务临时目录、结果验证、原子发布、重名递增和永不覆盖原文件。 |
 | 结果交互 | 打开输出/报告位置、复制精简错误、二次确认清空界面记录。 |
 | 报告导出 | CSV/JSON 记录任务结果，不包含文件内容或原始元数据载荷。 |
+| 本地偏好 | 只在本机记住工具区、图片参数和报告格式，不保存任务、路径或文件内容。 |
+| 常用预设 | 五个内置图片预设只填充已有参数，不选择文件或自动执行任务。 |
 
 ## Privacy-First Design
 
@@ -72,6 +74,7 @@ flowchart LR
 | 0.5.1 | macOS 安装与校验指引 |
 | 0.6.0 | CSV/JSON 任务报告导出 |
 | 0.6.1 | 输出导航、错误复制、历史清理确认与空状态优化 |
+| **0.7.0** | 本地偏好、工具区记忆与只填充参数的常用图片预设 |
 
 ## Suggested Demo Flow
 
