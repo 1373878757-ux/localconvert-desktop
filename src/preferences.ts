@@ -9,6 +9,18 @@ export type ToolSection =
 export type EnabledImageFormat = "jpg" | "png" | "webp";
 export type ResizeMode = "fit" | "width" | "height";
 export type ReportFormat = "csv" | "json";
+export type OutputLocationMode =
+  | "converted-folder-next-to-source"
+  | "same-folder-as-source"
+  | "ask-every-time"
+  | "remembered-custom-folder";
+export type OutputSuffixPreset =
+  | "current"
+  | "converted"
+  | "resized"
+  | "compressed"
+  | "cleaned"
+  | "custom";
 
 export type UserPreferences = {
   schemaVersion: 1;
@@ -21,6 +33,12 @@ export type UserPreferences = {
   webpCompressionQuality: number;
   preferencesPanelExpanded: boolean;
   reportFormat: ReportFormat;
+  outputLocationMode: OutputLocationMode;
+  rememberedOutputFolder: string;
+  outputPrefix: string;
+  outputSuffixPreset: OutputSuffixPreset;
+  outputCustomSuffix: string;
+  outputSettingsExpanded: boolean;
 };
 
 export type PreferenceInputState = Omit<
@@ -64,7 +82,13 @@ export const defaultPreferences: UserPreferences = {
   jpegCompressionQuality: 82,
   webpCompressionQuality: 80,
   preferencesPanelExpanded: true,
-  reportFormat: "csv"
+  reportFormat: "csv",
+  outputLocationMode: "converted-folder-next-to-source",
+  rememberedOutputFolder: "",
+  outputPrefix: "",
+  outputSuffixPreset: "current",
+  outputCustomSuffix: "",
+  outputSettingsExpanded: true
 };
 
 export const builtInPresets: readonly BuiltInPreset[] = [
@@ -161,7 +185,21 @@ export function buildPreferenceSnapshot(
       maxPreferenceCompressionQuality
     ),
     preferencesPanelExpanded: input.preferencesPanelExpanded,
-    reportFormat: input.reportFormat
+    reportFormat: input.reportFormat,
+    outputLocationMode:
+      input.outputLocationMode === "remembered-custom-folder" &&
+      !input.rememberedOutputFolder.trim()
+        ? "converted-folder-next-to-source"
+        : input.outputLocationMode,
+    rememberedOutputFolder: input.rememberedOutputFolder.trim(),
+    outputPrefix: input.outputPrefix.trim(),
+    outputSuffixPreset:
+      input.outputSuffixPreset === "custom" &&
+      !input.outputCustomSuffix.trim()
+        ? "current"
+        : input.outputSuffixPreset,
+    outputCustomSuffix: input.outputCustomSuffix.trim(),
+    outputSettingsExpanded: input.outputSettingsExpanded
   };
 }
 

@@ -26,6 +26,8 @@ import {
 import {
   BuiltInPresetId,
   EnabledImageFormat,
+  OutputLocationMode,
+  OutputSuffixPreset,
   ReportFormat,
   ResizeMode,
   ToolSection,
@@ -36,6 +38,12 @@ import {
   defaultPreferences,
   isEnabledImageExtension
 } from "./preferences";
+import {
+  outputLocationLabels,
+  outputSuffixLabels,
+  timestampTokens,
+  validateOutputPreferences
+} from "./outputSettings";
 
 type EngineStatus = {
   name: string;
@@ -61,9 +69,13 @@ type OutputPathPlan = {
   sourceDisplayName: string;
   targetExtension: string;
   plannedConvertedFolderPath: string;
+  plannedOutputDirectory: string;
+  plannedOutputStem: string;
   plannedOutputFilename: string;
   plannedOutputPath: string;
   collisionStrategyExplanation: string;
+  usedFallback: boolean;
+  warning: string | null;
 };
 
 type RejectedNativePath = {
@@ -318,7 +330,7 @@ const maxResizeDimension = 16_384;
 const maxResizePixels = 64_000_000;
 const minCompressionQuality = 40;
 const maxCompressionQuality = 95;
-const appVersion = "0.7.0";
+const appVersion = "0.8.0";
 
 const fallbackSelfCheck: EngineSelfCheck = {
   platform: "桌面预览",
@@ -650,6 +662,24 @@ function App() {
   const [reportFormat, setReportFormat] = useState<ReportFormat>(
     defaultPreferences.reportFormat
   );
+  const [outputLocationMode, setOutputLocationMode] =
+    useState<OutputLocationMode>(defaultPreferences.outputLocationMode);
+  const [rememberedOutputFolder, setRememberedOutputFolder] = useState(
+    defaultPreferences.rememberedOutputFolder
+  );
+  const [outputPrefix, setOutputPrefix] = useState(
+    defaultPreferences.outputPrefix
+  );
+  const [outputSuffixPreset, setOutputSuffixPreset] =
+    useState<OutputSuffixPreset>(defaultPreferences.outputSuffixPreset);
+  const [outputCustomSuffix, setOutputCustomSuffix] = useState(
+    defaultPreferences.outputCustomSuffix
+  );
+  const [outputSettingsExpanded, setOutputSettingsExpanded] = useState(
+    defaultPreferences.outputSettingsExpanded
+  );
+  const [outputSettingsMessage, setOutputSettingsMessage] = useState("");
+  const [outputSettingsWarning, setOutputSettingsWarning] = useState("");
   const [preferencesPanelExpanded, setPreferencesPanelExpanded] = useState(
     defaultPreferences.preferencesPanelExpanded
   );
@@ -684,6 +714,12 @@ function App() {
     setWebpCompressionQuality(String(preferences.webpCompressionQuality));
     setReportFormat(preferences.reportFormat);
     setPreferencesPanelExpanded(preferences.preferencesPanelExpanded);
+    setOutputLocationMode(preferences.outputLocationMode);
+    setRememberedOutputFolder(preferences.rememberedOutputFolder);
+    setOutputPrefix(preferences.outputPrefix);
+    setOutputSuffixPreset(preferences.outputSuffixPreset);
+    setOutputCustomSuffix(preferences.outputCustomSuffix);
+    setOutputSettingsExpanded(preferences.outputSettingsExpanded);
   }
 
   useEffect(() => {
@@ -769,7 +805,13 @@ function App() {
           jpegCompressionQuality,
           webpCompressionQuality,
           preferencesPanelExpanded,
-          reportFormat
+          reportFormat,
+          outputLocationMode,
+          rememberedOutputFolder,
+          outputPrefix,
+          outputSuffixPreset,
+          outputCustomSuffix,
+          outputSettingsExpanded
         },
         lastSavedPreferencesRef.current
       ),
@@ -777,7 +819,13 @@ function App() {
       activeTool,
       imageTargetFormat,
       jpegCompressionQuality,
+      outputCustomSuffix,
+      outputLocationMode,
+      outputPrefix,
+      outputSettingsExpanded,
+      outputSuffixPreset,
       preferencesPanelExpanded,
+      rememberedOutputFolder,
       reportFormat,
       resizeHeight,
       resizeMode,
@@ -1008,19 +1056,133 @@ function App() {
     selectedCancelledImageTasks.length === 0 &&
     selectedConvertingImageTasks.length === 0;
 
+  const outputPlanningPreferences = {
+    outputLocationMode,
+    rememberedOutputFolder,
+    outputPrefix,
+    outputSuffixPreset,
+    outputCustomSuffix
+  };
+  const outputRuleValidation = validateOutputPreferences(
+    outputPlanningPreferences
+  );
+
+  function ensureOutputRulesReady(): boolean {
+    if (outputRuleValidation.valid) {
+      return true;
+    }
+    setOutputSettingsWarning(outputRuleValidation.message);
+    setFolderMessage(`输出命名规则无效：${outputRuleValidation.message}`);
+    return false;
+  }
+
+  async function selectOutputFolderForOperation(): Promise<
+    string | undefined | null
+  > {
+    if (outputLocationMode !== "ask-every-time") {
+      return undefined;
+    }
+    const selected = await open({
+      title: "选择本次输出文件夹",
+      multiple: false,
+      directory: true
+    });
+    if (!selected || Array.isArray(selected)) {
+      setOutputSettingsMessage("已取消选择输出文件夹，未启动处理任务。");
+      return null;
+    }
+    setOutputSettingsMessage(`本次输出文件夹已选择：${selected}`);
+    setOutputSettingsWarning("");
+    return selected;
+  }
+
+  async function chooseRememberedOutputFolder() {
+    try {
+      const selected = await open({
+        title: "选择并记住输出文件夹",
+        multiple: false,
+        directory: true
+      });
+      if (!selected || Array.isArray(selected)) {
+        setOutputSettingsMessage("未更改记住的输出文件夹。");
+        return;
+      }
+      setRememberedOutputFolder(selected);
+      setOutputLocationMode("remembered-custom-folder");
+      setOutputSettingsMessage(`已选择并将在本机记住输出文件夹：${selected}`);
+      setOutputSettingsWarning("");
+    } catch (error) {
+      setOutputSettingsWarning(`无法选择输出文件夹：${String(error)}`);
+    }
+  }
+
+  function clearRememberedOutputFolder() {
+    setRememberedOutputFolder("");
+    if (outputLocationMode === "remembered-custom-folder") {
+      setOutputLocationMode("converted-folder-next-to-source");
+    }
+    setOutputSettingsMessage(
+      "已清除记住的输出文件夹，并恢复源文件旁的 converted 文件夹。"
+    );
+    setOutputSettingsWarning("");
+  }
+
+  async function planOperationOutput(
+    source: string,
+    targetExtension: string,
+    options: {
+      baseName?: string;
+      currentSuffix?: string;
+      selectedOutputFolder?: string;
+    } = {}
+  ): Promise<OutputPathPlan> {
+    if (!outputRuleValidation.valid) {
+      setOutputSettingsWarning(outputRuleValidation.message);
+      throw new Error(outputRuleValidation.message);
+    }
+    const tokens = timestampTokens();
+    const plan = await invoke<OutputPathPlan>("plan_output_path", {
+      request: {
+        source,
+        targetExtension,
+        outputStrategy: outputLocationMode,
+        selectedOutputFolder: options.selectedOutputFolder ?? null,
+        rememberedCustomFolder: rememberedOutputFolder || null,
+        baseName: options.baseName ?? null,
+        currentSuffix: options.currentSuffix ?? "",
+        naming: {
+          prefix: outputPrefix,
+          suffixPreset: outputSuffixPreset,
+          customSuffix: outputCustomSuffix
+        },
+        ...tokens
+      }
+    });
+    setOutputSettingsWarning(plan.warning ?? "");
+    return plan;
+  }
+
   async function planBackendOutput(task: LocalTask, targetExtension = "pdf") {
     if (task.sourceKind !== "native-path" || !task.sourcePath) {
       return;
     }
 
+    if (outputLocationMode === "ask-every-time") {
+      setTasks((currentTasks) =>
+        currentTasks.map((currentTask) =>
+          currentTask.taskId === task.taskId
+            ? {
+                ...currentTask,
+                outputPreview: "将在执行前询问输出文件夹"
+              }
+            : currentTask
+        )
+      );
+      return;
+    }
+
     try {
-      const plan = await invoke<OutputPathPlan>("plan_output_path", {
-        request: {
-          source: task.sourcePath,
-          targetExtension,
-          outputStrategy: "converted-folder-next-to-source"
-        }
-      });
+      const plan = await planOperationOutput(task.sourcePath, targetExtension);
 
       setTasks((currentTasks) =>
         currentTasks.map((currentTask) =>
@@ -1629,6 +1791,10 @@ function App() {
       setReportExportError("没有可导出的任务结果。");
       return;
     }
+    if (!ensureOutputRulesReady()) {
+      setReportExportError(outputRuleValidation.message);
+      return;
+    }
 
     setReportExporting(true);
     setReportExportMessage("");
@@ -1636,16 +1802,44 @@ function App() {
     const generatedAt = new Date();
 
     try {
-      const destinationPath = await save({
-        title: "导出处理报告",
-        defaultPath: reportFilename(reportFormat, generatedAt),
-        filters: [
+      const selectedOutputFolder = await selectOutputFolderForOperation();
+      if (selectedOutputFolder === null) {
+        setReportExportMessage("已取消导出，未写入报告。任务记录保持不变。");
+        return;
+      }
+      const reportName = reportFilename(reportFormat, generatedAt);
+      const nativeReportSource = reportRecords.find((record) =>
+        Boolean(record.sourcePath)
+      )?.sourcePath;
+      let destinationPath: string | null = null;
+
+      if (
+        outputLocationMode !== "converted-folder-next-to-source" &&
+        (nativeReportSource ||
+          outputLocationMode === "ask-every-time" ||
+          outputLocationMode === "remembered-custom-folder")
+      ) {
+        const outputPlan = await planOperationOutput(
+          nativeReportSource ?? reportName,
+          reportFormat,
           {
-            name: reportFormat === "csv" ? "CSV 报告" : "JSON 报告",
-            extensions: [reportFormat]
+            baseName: getBaseName(reportName),
+            selectedOutputFolder
           }
-        ]
-      });
+        );
+        destinationPath = outputPlan.plannedOutputPath;
+      } else {
+        destinationPath = await save({
+          title: "导出处理报告",
+          defaultPath: reportName,
+          filters: [
+            {
+              name: reportFormat === "csv" ? "CSV 报告" : "JSON 报告",
+              extensions: [reportFormat]
+            }
+          ]
+        });
+      }
 
       if (!destinationPath) {
         setReportExportMessage("已取消导出，未写入报告。任务记录保持不变。");
@@ -1996,6 +2190,14 @@ function App() {
       setFolderMessage(pdfToolsGuidance());
       return;
     }
+    if (!ensureOutputRulesReady()) {
+      return;
+    }
+
+    const selectedOutputFolder = await selectOutputFolderForOperation();
+    if (selectedOutputFolder === null) {
+      return;
+    }
 
     const taskIds = new Set(mergeTasks.map((task) => task.taskId));
     const backendTaskId = createBackendTaskId(
@@ -2025,13 +2227,9 @@ function App() {
         throw new Error("PDF 合并需要真实的本地源文件路径。");
       }
 
-      const outputSource = buildSiblingPath(firstSourcePath, "merged.pdf");
-      const outputPlan = await invoke<OutputPathPlan>("plan_output_path", {
-        request: {
-          source: outputSource,
-          targetExtension: "pdf",
-          outputStrategy: "converted-folder-next-to-source"
-        }
+      const outputPlan = await planOperationOutput(firstSourcePath, "pdf", {
+        baseName: "merged",
+        selectedOutputFolder
       });
       const response = await invoke<BackendTaskResponse<QpdfMergeResult>>(
         "qpdf_merge_pdfs",
@@ -2131,6 +2329,14 @@ function App() {
       );
       return;
     }
+    if (!ensureOutputRulesReady()) {
+      return;
+    }
+
+    const selectedOutputFolder = await selectOutputFolderForOperation();
+    if (selectedOutputFolder === null) {
+      return;
+    }
 
     const backendTaskId = createBackendTaskId("qpdf-split", task.taskId);
     cancelledTaskIdsRef.current.delete(task.taskId);
@@ -2149,14 +2355,18 @@ function App() {
     );
 
     try {
+      const outputPlan = await planOperationOutput(task.sourcePath, "pdf", {
+        baseName: `${getBaseName(task.displayName)}-page`,
+        selectedOutputFolder
+      });
       const response = await invoke<BackendTaskResponse<QpdfSplitResult>>(
         "qpdf_split_pdf",
         {
           taskId: backendTaskId,
           request: {
             source: task.sourcePath,
-            outputDirectory: buildSiblingDirectory(task.sourcePath, "converted"),
-            filenamePrefix: `${getBaseName(task.displayName)}-page`
+            outputDirectory: outputPlan.plannedOutputDirectory,
+            filenamePrefix: outputPlan.plannedOutputStem
           }
         }
       );
@@ -2250,6 +2460,14 @@ function App() {
       );
       return;
     }
+    if (!ensureOutputRulesReady()) {
+      return;
+    }
+
+    const selectedOutputFolder = await selectOutputFolderForOperation();
+    if (selectedOutputFolder === null) {
+      return;
+    }
 
     const pages = extractPageRange.trim();
     if (!pages) {
@@ -2274,16 +2492,10 @@ function App() {
     );
 
     try {
-      const outputSource = buildSiblingPath(
-        task.sourcePath,
-        `${getBaseName(task.displayName)} extracted.pdf`
-      );
-      const outputPlan = await invoke<OutputPathPlan>("plan_output_path", {
-        request: {
-          source: outputSource,
-          targetExtension: "pdf",
-          outputStrategy: "converted-folder-next-to-source"
-        }
+      const outputPlan = await planOperationOutput(task.sourcePath, "pdf", {
+        baseName: getBaseName(task.displayName),
+        currentSuffix: " extracted",
+        selectedOutputFolder
       });
       const response = await invoke<BackendTaskResponse<QpdfExtractResult>>(
         "qpdf_extract_pages",
@@ -2381,6 +2593,14 @@ function App() {
       );
       return;
     }
+    if (!ensureOutputRulesReady()) {
+      return;
+    }
+
+    const selectedOutputFolder = await selectOutputFolderForOperation();
+    if (selectedOutputFolder === null) {
+      return;
+    }
 
     const backendTaskId = createBackendTaskId("qpdf-rotate", task.taskId);
     cancelledTaskIdsRef.current.delete(task.taskId);
@@ -2399,16 +2619,10 @@ function App() {
     );
 
     try {
-      const outputSource = buildSiblingPath(
-        task.sourcePath,
-        `${getBaseName(task.displayName)} rotated.pdf`
-      );
-      const outputPlan = await invoke<OutputPathPlan>("plan_output_path", {
-        request: {
-          source: outputSource,
-          targetExtension: "pdf",
-          outputStrategy: "converted-folder-next-to-source"
-        }
+      const outputPlan = await planOperationOutput(task.sourcePath, "pdf", {
+        baseName: getBaseName(task.displayName),
+        currentSuffix: " rotated",
+        selectedOutputFolder
       });
       const response = await invoke<BackendTaskResponse<QpdfRotateResult>>(
         "qpdf_rotate_pages",
@@ -2505,6 +2719,14 @@ function App() {
       setFolderMessage(imageToolsGuidance());
       return;
     }
+    if (!ensureOutputRulesReady()) {
+      return;
+    }
+
+    const selectedOutputFolder = await selectOutputFolderForOperation();
+    if (selectedOutputFolder === null) {
+      return;
+    }
 
     const conversionTasks = selectedRealLocalImageTasks;
     const targetFormat = imageTargetFormat;
@@ -2549,13 +2771,19 @@ function App() {
       );
 
       try {
+        const outputPlan = await planOperationOutput(
+          task.sourcePath,
+          targetFormat,
+          { selectedOutputFolder }
+        );
         const response = await invoke<BackendTaskResponse<ImageConvertResult>>(
           "image_convert_file",
           {
             taskId: backendTaskId,
             request: {
               source: task.sourcePath,
-              targetFormat
+              targetFormat,
+              output: outputPlan.plannedOutputPath
             }
           }
         );
@@ -2666,6 +2894,14 @@ function App() {
       setFolderMessage(imageResizeGuidance());
       return;
     }
+    if (!ensureOutputRulesReady()) {
+      return;
+    }
+
+    const selectedOutputFolder = await selectOutputFolderForOperation();
+    if (selectedOutputFolder === null) {
+      return;
+    }
 
     const resizeTasks = selectedRealLocalImageTasks;
     const mode = resizeMode;
@@ -2692,7 +2928,6 @@ function App() {
         continue;
       }
 
-      await planBackendOutput(task, task.extension);
       const backendTaskId = createBackendTaskId("image-resize", task.taskId);
       cancelledTaskIdsRef.current.delete(task.taskId);
       const startedAt = Date.now();
@@ -2710,6 +2945,11 @@ function App() {
       );
 
       try {
+        const outputPlan = await planOperationOutput(
+          task.sourcePath,
+          task.extension,
+          { selectedOutputFolder }
+        );
         const response = await invoke<BackendTaskResponse<ImageResizeResult>>(
           "image_resize_file",
           {
@@ -2718,7 +2958,8 @@ function App() {
               source: task.sourcePath,
               mode,
               maxWidth: dimensions.maxWidth ?? null,
-              maxHeight: dimensions.maxHeight ?? null
+              maxHeight: dimensions.maxHeight ?? null,
+              output: outputPlan.plannedOutputPath
             }
           }
         );
@@ -2832,6 +3073,14 @@ function App() {
       setFolderMessage(imageCompressionGuidance());
       return;
     }
+    if (!ensureOutputRulesReady()) {
+      return;
+    }
+
+    const selectedOutputFolder = await selectOutputFolderForOperation();
+    if (selectedOutputFolder === null) {
+      return;
+    }
 
     const compressionTasks = selectedRealLocalImageTasks;
     const jpegQuality = jpegQualityValidation.value;
@@ -2882,13 +3131,19 @@ function App() {
       );
 
       try {
+        const outputPlan = await planOperationOutput(
+          task.sourcePath,
+          task.extension,
+          { currentSuffix: " compressed", selectedOutputFolder }
+        );
         const response = await invoke<BackendTaskResponse<ImageCompressResult>>(
           "image_compress_file",
           {
             taskId: backendTaskId,
             request: {
               source: task.sourcePath,
-              quality: quality ?? null
+              quality: quality ?? null,
+              output: outputPlan.plannedOutputPath
             }
           }
         );
@@ -3014,6 +3269,14 @@ function App() {
       setFolderMessage(imageMetadataCleanupGuidance());
       return;
     }
+    if (!ensureOutputRulesReady()) {
+      return;
+    }
+
+    const selectedOutputFolder = await selectOutputFolderForOperation();
+    if (selectedOutputFolder === null) {
+      return;
+    }
 
     const cleanupTasks = selectedRealLocalImageTasks;
     let publishedCount = 0;
@@ -3054,11 +3317,19 @@ function App() {
       );
 
       try {
+        const outputPlan = await planOperationOutput(
+          task.sourcePath,
+          task.extension,
+          { currentSuffix: " cleaned", selectedOutputFolder }
+        );
         const response = await invoke<BackendTaskResponse<ImageCleanMetadataResult>>(
           "image_clean_metadata_file",
           {
             taskId: backendTaskId,
-            request: { source: task.sourcePath }
+            request: {
+              source: task.sourcePath,
+              output: outputPlan.plannedOutputPath
+            }
           }
         );
         const result = response.result;
@@ -3203,12 +3474,17 @@ function App() {
     setPreferencesMessage("正在重置偏好设置...");
     setPreferencesWarning("");
     setPresetMessage("");
+    setOutputSettingsMessage("正在重置输出设置与其他偏好...");
+    setOutputSettingsWarning("");
 
     try {
       const result = await invoke<PreferencesMutationResult>("reset_preferences");
       lastSavedPreferencesRef.current = result.preferences;
       applyPreferencesToState(result.preferences);
       setPreferencesMessage(result.message);
+      setOutputSettingsMessage(
+        "输出设置已恢复安全默认值；未删除任务、输出文件或报告。"
+      );
     } catch (error) {
       setPreferencesWarning(`无法重置本机偏好设置：${String(error)}`);
     } finally {
@@ -3471,10 +3747,10 @@ function App() {
             </div>
           </section>
 
-          <section className="image-tools-panel" aria-label="Preview 0.7 图片工具">
+          <section className="image-tools-panel" aria-label="Preview 0.8 图片工具">
             <div className="pdf-tools-header">
               <div>
-                <p className="section-kicker">Preview 0.7 · 本地功能预览</p>
+                <p className="section-kicker">Preview 0.8 · 本地功能预览</p>
                 <h2>图片工具</h2>
                 <p>
                   {imageEngineAvailable
@@ -3521,7 +3797,7 @@ function App() {
             <div className="pdf-tool-grid image-tool-grid">
               <article id="image-convert-tool" className="pdf-tool-card image-tool-card">
                 <h3>图片格式转换</h3>
-                <p>选择任务和输出格式。结果写入源文件旁边的 converted 文件夹，不覆盖原文件。</p>
+                <p>选择任务和输出格式。结果按右侧输出设置保存，不覆盖原文件。</p>
                 <ul className="image-conversion-matrix" aria-label="已启用的图片转换方向">
                   <li>JPG/JPEG → PNG、WebP</li>
                   <li>PNG → JPG、WebP</li>
@@ -3550,7 +3826,7 @@ function App() {
 
               <article id="image-resize-tool" className="pdf-tool-card image-tool-card image-resize-card">
                 <h3>图片改尺寸 <span className="preview-label">Preview</span></h3>
-                <p>保持原格式和宽高比，结果写入 converted 文件夹，不放大较小图片。</p>
+                <p>保持原格式和宽高比，结果按右侧输出设置保存，不放大较小图片。</p>
                 <fieldset className="resize-mode-fieldset">
                   <legend>调整方式</legend>
                   <div className="resize-mode-control">
@@ -3922,7 +4198,7 @@ function App() {
                   </p>
                 ) : null}
                 <p className="preferences-privacy-note">
-                  仅保存工具区、格式、尺寸、质量、报告格式与面板状态；不保存任务、文件路径、报告路径、文件内容或元数据。
+                  仅保存工具区、处理参数、输出规则与面板状态；只有你明确选择的自定义输出文件夹会作为本地偏好保存。不会保存源文件路径、任务历史、报告路径、文件内容或原始元数据。
                 </p>
                 <button
                   type="button"
@@ -3936,10 +4212,141 @@ function App() {
             ) : null}
           </section>
 
-          <section className="inspector-card">
-            <h2>输出规则</h2>
-            <p>默认输出到源文件旁边的 converted 文件夹。</p>
-            <pre>{outputNameExample.join("\n")}</pre>
+          <section className="inspector-card output-settings-card">
+            <div className="preferences-card-header">
+              <div>
+                <h2>输出设置</h2>
+                <p>位置和命名规则仅保存在本机。</p>
+              </div>
+              <button
+                type="button"
+                className="small-button secondary-button"
+                aria-expanded={outputSettingsExpanded}
+                onClick={() =>
+                  setOutputSettingsExpanded((expanded) => !expanded)
+                }
+              >
+                {outputSettingsExpanded ? "收起" : "展开"}
+              </button>
+            </div>
+            {outputSettingsMessage ? (
+              <p className="preferences-status" role="status">
+                {outputSettingsMessage}
+              </p>
+            ) : null}
+            {outputSettingsWarning || !outputRuleValidation.valid ? (
+              <p className="preferences-warning" role="alert">
+                {outputSettingsWarning || outputRuleValidation.message}
+              </p>
+            ) : null}
+            {outputSettingsExpanded ? (
+              <div className="output-settings-content">
+                <label className="output-settings-field">
+                  <span>输出位置</span>
+                  <select
+                    value={outputLocationMode}
+                    onChange={(event) => {
+                      setOutputLocationMode(
+                        event.currentTarget.value as OutputLocationMode
+                      );
+                      setOutputSettingsMessage("输出位置设置将自动保存到本机。");
+                      setOutputSettingsWarning("");
+                    }}
+                  >
+                    {Object.entries(outputLocationLabels).map(
+                      ([value, label]) => (
+                        <option value={value} key={value}>
+                          {label}
+                        </option>
+                      )
+                    )}
+                  </select>
+                </label>
+                {outputLocationMode === "remembered-custom-folder" ||
+                rememberedOutputFolder ? (
+                  <div className="remembered-folder-control">
+                    <span
+                      className="remembered-folder-path"
+                      title={rememberedOutputFolder || "尚未选择"}
+                    >
+                      {rememberedOutputFolder || "尚未选择自定义输出文件夹"}
+                    </span>
+                    <div className="inline-actions">
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={() => void chooseRememberedOutputFolder()}
+                      >
+                        选择并记住
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={clearRememberedOutputFolder}
+                        disabled={!rememberedOutputFolder}
+                      >
+                        清除
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+                <label className="output-settings-field">
+                  <span>可选前缀</span>
+                  <input
+                    value={outputPrefix}
+                    placeholder="例如：{date}_"
+                    maxLength={80}
+                    onChange={(event) => {
+                      setOutputPrefix(event.currentTarget.value);
+                      setOutputSettingsMessage("输出命名设置将自动保存到本机。");
+                      setOutputSettingsWarning("");
+                    }}
+                  />
+                </label>
+                <label className="output-settings-field">
+                  <span>文件名后缀</span>
+                  <select
+                    value={outputSuffixPreset}
+                    onChange={(event) => {
+                      setOutputSuffixPreset(
+                        event.currentTarget.value as OutputSuffixPreset
+                      );
+                      setOutputSettingsMessage("输出命名设置将自动保存到本机。");
+                      setOutputSettingsWarning("");
+                    }}
+                  >
+                    {Object.entries(outputSuffixLabels).map(([value, label]) => (
+                      <option value={value} key={value}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {outputSuffixPreset === "custom" ? (
+                  <label className="output-settings-field">
+                    <span>自定义后缀</span>
+                    <input
+                      value={outputCustomSuffix}
+                      placeholder="例如：_归档_{time}"
+                      maxLength={80}
+                      onChange={(event) => {
+                        setOutputCustomSuffix(event.currentTarget.value);
+                        setOutputSettingsMessage("输出命名设置将自动保存到本机。");
+                        setOutputSettingsWarning("");
+                      }}
+                    />
+                  </label>
+                ) : null}
+                <p className="output-token-note">
+                  可使用 {"{date}"} 和 {"{time}"}。扩展名由实际格式决定。
+                </p>
+                <div className="output-safety-note">
+                  <strong>原文件不会被覆盖。</strong>
+                  <span>如遇重名，将自动生成不覆盖的文件名。</span>
+                </div>
+                <pre>{outputNameExample.join("\n")}</pre>
+              </div>
+            ) : null}
           </section>
 
           <section id="report-export-tool" className="inspector-card report-export-card">

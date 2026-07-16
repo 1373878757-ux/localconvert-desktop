@@ -1,6 +1,7 @@
 use crate::{
     image_engine, image_ops,
     output_finalize::TaskOutputWorkspace,
+    output_planning,
     task_registry::{ChildProcessState, TaskCommitError, TaskControl},
 };
 use serde::{Deserialize, Serialize};
@@ -27,6 +28,8 @@ const DEFAULT_WEBP_QUALITY: u8 = 80;
 pub struct ImageConvertExecutionRequest {
     source: String,
     target_format: String,
+    #[serde(default)]
+    output: Option<String>,
 }
 
 #[derive(Serialize, Debug, PartialEq, Eq)]
@@ -55,6 +58,8 @@ pub struct ImageResizeExecutionRequest {
     mode: String,
     max_width: Option<u32>,
     max_height: Option<u32>,
+    #[serde(default)]
+    output: Option<String>,
 }
 
 #[derive(Serialize, Debug, PartialEq, Eq)]
@@ -86,6 +91,8 @@ pub struct ImageResizeResult {
 pub struct ImageCompressExecutionRequest {
     source: String,
     quality: Option<u8>,
+    #[serde(default)]
+    output: Option<String>,
 }
 
 #[derive(Serialize, Debug, PartialEq, Eq)]
@@ -118,6 +125,8 @@ pub struct ImageCompressResult {
 #[serde(rename_all = "camelCase")]
 pub struct ImageCleanMetadataExecutionRequest {
     source: String,
+    #[serde(default)]
+    output: Option<String>,
 }
 
 #[derive(Serialize, Debug, PartialEq, Eq)]
@@ -427,11 +436,16 @@ fn execute_image_convert(
         return Err("Source and target image formats must differ.".to_string());
     }
 
-    let planned_output =
-        image_ops::plan_image_output(&path_to_string(&source_path), &target_format)?;
-    let converted_folder = PathBuf::from(&planned_output.planned_converted_folder_path);
-    let output_path = PathBuf::from(&planned_output.planned_output_path);
-    validate_planned_output_location(&source_path, &converted_folder, &output_path)?;
+    let output_path = resolve_image_output_path(
+        request.output.as_deref(),
+        &source_path,
+        &target_format,
+        ImageOutputKind::Convert,
+    )?;
+    let converted_folder = output_path
+        .parent()
+        .ok_or_else(|| "Image output must have a parent folder.".to_string())?
+        .to_path_buf();
 
     let image_engine_path =
         image_engine::resolve_image_engine_sidecar_path(image_engine::current_platform_key())?;
@@ -598,11 +612,16 @@ fn execute_image_resize(
     let mode = normalize_resize_mode(&request.mode)?;
     validate_resize_dimensions(mode, request.max_width, request.max_height)?;
 
-    let planned_output =
-        image_ops::plan_image_output(&path_to_string(&source_path), &output_extension)?;
-    let converted_folder = PathBuf::from(&planned_output.planned_converted_folder_path);
-    let output_path = PathBuf::from(&planned_output.planned_output_path);
-    validate_planned_output_location(&source_path, &converted_folder, &output_path)?;
+    let output_path = resolve_image_output_path(
+        request.output.as_deref(),
+        &source_path,
+        &output_extension,
+        ImageOutputKind::Resize,
+    )?;
+    let converted_folder = output_path
+        .parent()
+        .ok_or_else(|| "Image output must have a parent folder.".to_string())?
+        .to_path_buf();
 
     let image_engine_path =
         image_engine::resolve_image_engine_sidecar_path(image_engine::current_platform_key())?;
@@ -755,11 +774,16 @@ fn execute_image_compress(
         .map_err(|error| format!("Unable to inspect source image size: {error}"))?
         .len();
 
-    let planned_output =
-        image_ops::plan_compressed_image_output(&path_to_string(&source_path), &output_extension)?;
-    let converted_folder = PathBuf::from(&planned_output.planned_converted_folder_path);
-    let output_path = PathBuf::from(&planned_output.planned_output_path);
-    validate_planned_output_location(&source_path, &converted_folder, &output_path)?;
+    let output_path = resolve_image_output_path(
+        request.output.as_deref(),
+        &source_path,
+        &output_extension,
+        ImageOutputKind::Compress,
+    )?;
+    let converted_folder = output_path
+        .parent()
+        .ok_or_else(|| "Image output must have a parent folder.".to_string())?
+        .to_path_buf();
 
     let image_engine_path =
         image_engine::resolve_image_engine_sidecar_path(image_engine::current_platform_key())?;
@@ -935,11 +959,16 @@ fn execute_image_clean_metadata(
     let source_bytes = fs::metadata(&source_path)
         .map_err(|error| format!("Unable to inspect source image size: {error}"))?
         .len();
-    let planned_output =
-        image_ops::plan_cleaned_image_output(&path_to_string(&source_path), &output_extension)?;
-    let converted_folder = PathBuf::from(&planned_output.planned_converted_folder_path);
-    let output_path = PathBuf::from(&planned_output.planned_output_path);
-    validate_planned_output_location(&source_path, &converted_folder, &output_path)?;
+    let output_path = resolve_image_output_path(
+        request.output.as_deref(),
+        &source_path,
+        &output_extension,
+        ImageOutputKind::Cleaned,
+    )?;
+    let converted_folder = output_path
+        .parent()
+        .ok_or_else(|| "Image output must have a parent folder.".to_string())?
+        .to_path_buf();
 
     let image_engine_path =
         image_engine::resolve_image_engine_sidecar_path(image_engine::current_platform_key())?;
@@ -1453,26 +1482,43 @@ fn resize_output_extension(source_path: &Path) -> Result<String, String> {
         .ok_or_else(|| "Source image must include a supported file extension.".to_string())
 }
 
-fn validate_planned_output_location(
-    source_path: &Path,
-    converted_folder: &Path,
-    output_path: &Path,
-) -> Result<(), String> {
-    let expected_folder = source_path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .map(|parent| parent.join("converted"))
-        .ok_or_else(|| "Source image must have a parent folder.".to_string())?;
-    if converted_folder != expected_folder || output_path.parent() != Some(converted_folder) {
-        return Err(
-            "Image output must be inside the source-adjacent converted folder.".to_string(),
-        );
-    }
-    if output_path == source_path {
-        return Err("Image output must not replace the source image.".to_string());
-    }
+#[derive(Clone, Copy)]
+enum ImageOutputKind {
+    Convert,
+    Resize,
+    Compress,
+    Cleaned,
+}
 
-    Ok(())
+fn resolve_image_output_path(
+    requested_output: Option<&str>,
+    source_path: &Path,
+    output_extension: &str,
+    kind: ImageOutputKind,
+) -> Result<PathBuf, String> {
+    let desired_output = match requested_output
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(path) => PathBuf::from(path),
+        None => {
+            let source = path_to_string(source_path);
+            let planned = match kind {
+                ImageOutputKind::Convert | ImageOutputKind::Resize => {
+                    image_ops::plan_image_output(&source, output_extension)?
+                }
+                ImageOutputKind::Compress => {
+                    image_ops::plan_compressed_image_output(&source, output_extension)?
+                }
+                ImageOutputKind::Cleaned => {
+                    image_ops::plan_cleaned_image_output(&source, output_extension)?
+                }
+            };
+            PathBuf::from(planned.planned_output_path)
+        }
+    };
+
+    output_planning::prepare_execution_output(&desired_output, output_extension, &[source_path])
 }
 
 fn build_image_convert_arguments(
@@ -2106,6 +2152,7 @@ mod tests {
     #[test]
     fn rejects_missing_non_image_and_same_format_requests() {
         let missing = image_convert_file(ImageConvertExecutionRequest {
+            output: None,
             source: "/missing/source.png".to_string(),
             target_format: "webp".to_string(),
         });
@@ -2117,6 +2164,7 @@ mod tests {
         let source = case_dir.join("source.png");
         create_test_png(&source);
         let same_format = image_convert_file(ImageConvertExecutionRequest {
+            output: None,
             source: path_to_string(&source),
             target_format: "png".to_string(),
         });
@@ -2134,6 +2182,7 @@ mod tests {
         fs::write(&source, b"not-decoded").expect("HEIC placeholder should be written");
 
         let result = image_convert_file(ImageConvertExecutionRequest {
+            output: None,
             source: path_to_string(&source),
             target_format: "jpg".to_string(),
         });
@@ -2153,6 +2202,7 @@ mod tests {
         fs::write(&source, b"not-decoded").expect("HEIC placeholder should be written");
 
         let result = image_resize_file(ImageResizeExecutionRequest {
+            output: None,
             source: path_to_string(&source),
             mode: "fit".to_string(),
             max_width: Some(1200),
@@ -2174,6 +2224,7 @@ mod tests {
         fs::write(&source, b"not-decoded").expect("HEIC fixture should be written");
 
         let result = image_compress_file(ImageCompressExecutionRequest {
+            output: None,
             source: path_to_string(&source),
             quality: None,
         });
@@ -2185,6 +2236,7 @@ mod tests {
         let unsupported = case_dir.join("unsupported.gif");
         fs::write(&unsupported, b"not-decoded").expect("unsupported fixture should be written");
         let unsupported_result = image_compress_file(ImageCompressExecutionRequest {
+            output: None,
             source: path_to_string(&unsupported),
             quality: None,
         });
@@ -2212,6 +2264,7 @@ mod tests {
 
         let result = image_convert_task(
             ImageConvertExecutionRequest {
+                output: None,
                 source: path_to_string(&source),
                 target_format: "webp".to_string(),
             },
@@ -2246,6 +2299,7 @@ mod tests {
 
         let result = image_resize_task(
             ImageResizeExecutionRequest {
+                output: None,
                 source: path_to_string(&source),
                 mode: "width".to_string(),
                 max_width: Some(2),
@@ -2282,6 +2336,7 @@ mod tests {
 
         let result = image_compress_task(
             ImageCompressExecutionRequest {
+                output: None,
                 source: path_to_string(&source),
                 quality: Some(82),
             },
@@ -2364,6 +2419,7 @@ mod tests {
             .expect("metadata cleanup task should cancel");
         let result = image_clean_metadata_task(
             ImageCleanMetadataExecutionRequest {
+                output: None,
                 source: path_to_string(&source),
             },
             control,
@@ -2389,6 +2445,7 @@ mod tests {
         fs::write(&source, b"unsupported fixture").expect("HEIC fixture should be written");
 
         let result = image_clean_metadata_file(ImageCleanMetadataExecutionRequest {
+            output: None,
             source: path_to_string(&source),
         });
 
@@ -2400,6 +2457,7 @@ mod tests {
         fs::write(&unsupported, b"unsupported fixture")
             .expect("unsupported fixture should be written");
         let unsupported_result = image_clean_metadata_file(ImageCleanMetadataExecutionRequest {
+            output: None,
             source: path_to_string(&unsupported),
         });
         assert!(!unsupported_result.success);
@@ -2456,6 +2514,7 @@ mod tests {
         let source_before = create_test_png(&source);
 
         let result = image_convert_file(ImageConvertExecutionRequest {
+            output: None,
             source: path_to_string(&source),
             target_format: "webp".to_string(),
         });
@@ -2477,6 +2536,35 @@ mod tests {
 
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     #[test]
+    fn bundled_sidecar_publishes_to_custom_output_folder_without_touching_source() {
+        let root = temp_case_dir("custom-output");
+        let source_dir = root.join("源 文件");
+        let output_dir = root.join("客户 输出");
+        fs::create_dir_all(&source_dir).expect("source directory should be created");
+        fs::create_dir_all(&output_dir).expect("custom output directory should be created");
+        let source = source_dir.join("图片 示例.png");
+        let source_before = create_test_png(&source);
+        let desired_output = output_dir.join("前缀_图片 示例_converted.webp");
+
+        let result = image_convert_file(ImageConvertExecutionRequest {
+            output: Some(path_to_string(&desired_output)),
+            source: path_to_string(&source),
+            target_format: "webp".to_string(),
+        });
+
+        assert!(result.success, "{}\n{}", result.message, result.stderr);
+        assert_eq!(Path::new(&result.output_path), desired_output);
+        assert!(desired_output.exists());
+        assert_eq!(
+            fs::read(&source).expect("source should remain readable"),
+            source_before
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[test]
     fn bundled_sidecar_converts_jpeg_to_png_and_preserves_source() {
         let case_dir = temp_case_dir("jpeg-to-png").join("客户 文件 with spaces");
         fs::create_dir_all(&case_dir).expect("smoke directory should be created");
@@ -2484,6 +2572,7 @@ mod tests {
         let source_before = create_test_rgb_image(&source, ImageFormat::Jpeg);
 
         let result = image_convert_file(ImageConvertExecutionRequest {
+            output: None,
             source: path_to_string(&source),
             target_format: "png".to_string(),
         });
@@ -2512,6 +2601,7 @@ mod tests {
         let source_before = create_test_rgb_image(&source, ImageFormat::WebP);
 
         let result = image_convert_file(ImageConvertExecutionRequest {
+            output: None,
             source: path_to_string(&source),
             target_format: "jpg".to_string(),
         });
@@ -2544,6 +2634,7 @@ mod tests {
             .expect("existing output should be written");
 
         let result = image_convert_file(ImageConvertExecutionRequest {
+            output: None,
             source: path_to_string(&source),
             target_format: "webp".to_string(),
         });
@@ -2575,6 +2666,7 @@ mod tests {
             .expect("existing output should be written");
 
         let result = image_resize_file(ImageResizeExecutionRequest {
+            output: None,
             source: path_to_string(&source),
             mode: "width".to_string(),
             max_width: Some(2),
@@ -2614,6 +2706,7 @@ mod tests {
         let source_before = create_test_rgb_image(&source, ImageFormat::WebP);
 
         let result = image_resize_file(ImageResizeExecutionRequest {
+            output: None,
             source: path_to_string(&source),
             mode: "fit".to_string(),
             max_width: Some(1000),
@@ -2646,6 +2739,7 @@ mod tests {
             .expect("existing output should be written");
 
         let result = image_compress_file(ImageCompressExecutionRequest {
+            output: None,
             source: path_to_string(&source),
             quality: Some(60),
         });
@@ -2680,6 +2774,7 @@ mod tests {
         let webp_source = case_dir.join("网页 图片.webp");
         let webp_before = create_lossless_webp(&webp_source);
         let webp_result = image_compress_file(ImageCompressExecutionRequest {
+            output: None,
             source: path_to_string(&webp_source),
             quality: Some(60),
         });
@@ -2696,6 +2791,7 @@ mod tests {
         let png_source = case_dir.join("无损 图片.png");
         let png_before = create_png_with_compression(&png_source, PngCompressionType::Uncompressed);
         let png_result = image_compress_file(ImageCompressExecutionRequest {
+            output: None,
             source: path_to_string(&png_source),
             quality: None,
         });
@@ -2723,6 +2819,7 @@ mod tests {
         let source_before = create_png_with_compression(&source, PngCompressionType::Best);
 
         let result = image_compress_file(ImageCompressExecutionRequest {
+            output: None,
             source: path_to_string(&source),
             quality: None,
         });
@@ -2762,6 +2859,7 @@ mod tests {
             .expect("existing output should be written");
 
         let result = image_clean_metadata_file(ImageCleanMetadataExecutionRequest {
+            output: None,
             source: path_to_string(&source),
         });
 
@@ -2799,6 +2897,7 @@ mod tests {
         let source_before = create_test_png(&source);
 
         let result = image_clean_metadata_file(ImageCleanMetadataExecutionRequest {
+            output: None,
             source: path_to_string(&source),
         });
 

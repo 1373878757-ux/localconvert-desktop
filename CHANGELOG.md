@@ -2,7 +2,15 @@
 
 ## Unreleased
 
-No unreleased changes.
+### Preview 0.8.0 - Output Location And Naming Rules
+
+- Aligned npm, Cargo, Tauri, and in-app version metadata to `0.8.0` for the current development line; the latest public release remains Preview 0.7.0.
+- Added local output location preferences for the existing source-adjacent `converted` folder, the source folder, per-operation folder selection, and an explicitly remembered custom folder.
+- Added safe output prefix and suffix rules, including existing operation names, `_converted`, `_resized`, `_compressed`, `_cleaned`, custom suffixes, and local `{date}` / `{time}` expansion.
+- Centralized output path planning and execution validation in Rust for PDF, image, metadata cleanup, and report tasks while preserving correct extensions, atomic publication, source protection, and collision-safe `(1)` naming.
+- Added non-blocking fallback when a remembered custom folder is unavailable, plus controls to choose or clear the stored folder.
+- Extended local preferences and reset behavior without storing source paths, task history, report paths, file contents, raw metadata, credentials, or cloud state; reset never deletes files, reports, or task records.
+- Kept qpdf and image-engine processing semantics unchanged and added no engine, platform, upload, cloud, server, telemetry, or network capability.
 
 ## Preview 0.7.0 - 2026-07-17
 

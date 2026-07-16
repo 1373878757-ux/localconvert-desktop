@@ -37,13 +37,13 @@ impl TaskOutputWorkspace {
 
         if final_parent.exists() && !final_parent.is_dir() {
             return Err(format!(
-                "Converted output path exists but is not a folder: {}",
+                "Output path exists but is not a folder: {}",
                 path_to_string(final_parent)
             ));
         }
         fs::create_dir_all(final_parent).map_err(|error| {
             format!(
-                "Unable to create converted output folder {}: {error}",
+                "Unable to create output folder {}: {error}",
                 path_to_string(final_parent)
             )
         })?;
@@ -163,7 +163,7 @@ impl TaskOutputWorkspace {
         }
         if final_path.parent() != Some(self.final_parent.as_path()) {
             return Err(format!(
-                "Final output must stay inside the converted output folder: {}",
+                "Final output must stay inside the selected output folder: {}",
                 path_to_string(final_path)
             ));
         }

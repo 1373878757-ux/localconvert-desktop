@@ -13,6 +13,7 @@ const MAX_RESIZE_DIMENSION: u32 = 16_384;
 const MAX_RESIZE_PIXELS: u64 = 64_000_000;
 const MIN_COMPRESSION_QUALITY: u8 = 40;
 const MAX_COMPRESSION_QUALITY: u8 = 95;
+const MAX_OUTPUT_AFFIX_CHARS: usize = 80;
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -52,6 +53,28 @@ pub enum ReportFormat {
     Json,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum OutputLocationMode {
+    #[default]
+    ConvertedFolderNextToSource,
+    SameFolderAsSource,
+    AskEveryTime,
+    RememberedCustomFolder,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum OutputSuffixPreset {
+    #[default]
+    Current,
+    Converted,
+    Resized,
+    Compressed,
+    Cleaned,
+    Custom,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct UserPreferences {
@@ -65,6 +88,12 @@ pub struct UserPreferences {
     pub webp_compression_quality: u8,
     pub preferences_panel_expanded: bool,
     pub report_format: ReportFormat,
+    pub output_location_mode: OutputLocationMode,
+    pub remembered_output_folder: String,
+    pub output_prefix: String,
+    pub output_suffix_preset: OutputSuffixPreset,
+    pub output_custom_suffix: String,
+    pub output_settings_expanded: bool,
 }
 
 impl Default for UserPreferences {
@@ -80,6 +109,12 @@ impl Default for UserPreferences {
             webp_compression_quality: 80,
             preferences_panel_expanded: true,
             report_format: ReportFormat::Csv,
+            output_location_mode: OutputLocationMode::ConvertedFolderNextToSource,
+            remembered_output_folder: String::new(),
+            output_prefix: String::new(),
+            output_suffix_preset: OutputSuffixPreset::Current,
+            output_custom_suffix: String::new(),
+            output_settings_expanded: true,
         }
     }
 }
@@ -104,7 +139,37 @@ impl UserPreferences {
         self.webp_compression_quality = self
             .webp_compression_quality
             .clamp(MIN_COMPRESSION_QUALITY, MAX_COMPRESSION_QUALITY);
+        self.remembered_output_folder = self.remembered_output_folder.trim().to_string();
+        self.output_prefix = normalize_output_affix(self.output_prefix);
+        self.output_custom_suffix = normalize_output_affix(self.output_custom_suffix);
+        if self.output_location_mode == OutputLocationMode::RememberedCustomFolder
+            && self.remembered_output_folder.is_empty()
+        {
+            self.output_location_mode = OutputLocationMode::ConvertedFolderNextToSource;
+        }
+        if self.output_suffix_preset == OutputSuffixPreset::Custom
+            && self.output_custom_suffix.is_empty()
+        {
+            self.output_suffix_preset = OutputSuffixPreset::Current;
+        }
         self
+    }
+}
+
+fn normalize_output_affix(value: String) -> String {
+    let value = value.trim();
+    if value.chars().count() > MAX_OUTPUT_AFFIX_CHARS
+        || value.chars().any(|character| {
+            character.is_control()
+                || matches!(
+                    character,
+                    '/' | '\\' | '\0' | ':' | '*' | '?' | '"' | '<' | '>' | '|'
+                )
+        })
+    {
+        String::new()
+    } else {
+        value.to_string()
     }
 }
 
@@ -293,6 +358,12 @@ mod tests {
             resize_width: 2_048,
             report_format: ReportFormat::Json,
             preferences_panel_expanded: false,
+            output_location_mode: OutputLocationMode::RememberedCustomFolder,
+            remembered_output_folder: "/Users/test/LocalConvert 输出".to_string(),
+            output_prefix: "{date}_".to_string(),
+            output_suffix_preset: OutputSuffixPreset::Custom,
+            output_custom_suffix: "_完成".to_string(),
+            output_settings_expanded: false,
             ..UserPreferences::default()
         };
 
@@ -378,10 +449,12 @@ mod tests {
         fs::create_dir_all(&directory).expect("create test directory");
         let path = directory.join(PREFERENCES_FILE_NAME);
         let sibling = directory.join("keep-this-report.json");
+        let output = directory.join("keep-this-output.pdf");
         fs::write(&path, "preferences").expect("write preferences");
         fs::write(directory.join(PREFERENCES_TEMP_FILE_NAME), "temporary")
             .expect("write temp preferences");
         fs::write(&sibling, "report").expect("write sibling file");
+        fs::write(&output, "output").expect("write output file");
 
         let result = reset_preferences_at_path(&path).expect("reset preferences");
 
@@ -389,6 +462,7 @@ mod tests {
         assert!(!path.exists());
         assert!(!directory.join(PREFERENCES_TEMP_FILE_NAME).exists());
         assert!(sibling.exists());
+        assert!(output.exists());
         let _ = fs::remove_dir_all(directory);
     }
 
@@ -403,6 +477,7 @@ mod tests {
             "outputpath",
             "reportpath",
             "taskhistory",
+            "filecontents",
             "exif",
             "gps",
             "xmp",
@@ -411,5 +486,27 @@ mod tests {
         ] {
             assert!(!serialized.contains(forbidden), "found {forbidden}");
         }
+    }
+
+    #[test]
+    fn invalid_output_preferences_fall_back_without_paths_or_file_deletion() {
+        let normalized = UserPreferences {
+            output_location_mode: OutputLocationMode::RememberedCustomFolder,
+            remembered_output_folder: "   ".to_string(),
+            output_prefix: "../unsafe".to_string(),
+            output_suffix_preset: OutputSuffixPreset::Custom,
+            output_custom_suffix: "bad/name".to_string(),
+            ..UserPreferences::default()
+        }
+        .normalized();
+
+        assert_eq!(
+            normalized.output_location_mode,
+            OutputLocationMode::ConvertedFolderNextToSource
+        );
+        assert!(normalized.remembered_output_folder.is_empty());
+        assert!(normalized.output_prefix.is_empty());
+        assert_eq!(normalized.output_suffix_preset, OutputSuffixPreset::Current);
+        assert!(normalized.output_custom_suffix.is_empty());
     }
 }

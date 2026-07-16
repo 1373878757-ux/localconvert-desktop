@@ -1,5 +1,6 @@
 use crate::{
     output_finalize::{FinalizedOutput, TaskOutputWorkspace},
+    output_planning,
     task_registry::{ChildProcessState, TaskCommitError, TaskControl},
     timed_process::{run_command_with_timeout, ENGINE_SELF_CHECK_TIMEOUT},
 };
@@ -9,6 +10,7 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::{Mutex, OnceLock},
     thread,
     time::{Duration, Instant},
 };
@@ -330,15 +332,25 @@ fn execute_qpdf_merge(
     }
 
     build_qpdf_merge_arguments(request)?;
-    let output_path = PathBuf::from(validate_pdf_path(&request.output, "Output PDF")?);
+    let requested_output = PathBuf::from(validate_pdf_path(&request.output, "Output PDF")?);
     validate_merge_source_files(&request.sources)?;
-    validate_merge_output_path(&output_path)?;
+    let source_paths = request
+        .sources
+        .iter()
+        .map(PathBuf::from)
+        .collect::<Vec<_>>();
+    let source_refs = source_paths
+        .iter()
+        .map(PathBuf::as_path)
+        .collect::<Vec<_>>();
+    let output_path =
+        output_planning::prepare_execution_output(&requested_output, "pdf", &source_refs)?;
 
     let platform = current_platform_key();
     let qpdf_path = resolve_qpdf_sidecar_path(platform)?;
     let output_parent = output_path
         .parent()
-        .ok_or_else(|| "Output PDF must have a converted output folder.".to_string())?;
+        .ok_or_else(|| "Output PDF must have a parent folder.".to_string())?;
     let workspace = TaskOutputWorkspace::create(output_parent, control.task_id())?;
     let temp_output = workspace.temp_file("merged.pdf")?;
     let plan = build_qpdf_merge_arguments_for_output(&request.sources, &temp_output)?;
@@ -454,7 +466,7 @@ fn execute_qpdf_split(
     let filename_prefix = normalize_split_filename_prefix(request.filename_prefix.as_deref())?;
 
     validate_source_pdf_file(&source_path)?;
-    validate_split_output_location(&source_path, &output_directory)?;
+    output_planning::validate_output_directory_for_execution(&output_directory)?;
 
     let split_prefix = collision_safe_split_prefix(&output_directory, &filename_prefix)?;
     let platform = current_platform_key();
@@ -633,14 +645,13 @@ fn execute_qpdf_extract(
     let pages = normalize_page_ranges(&request.pages)?;
 
     validate_source_pdf_file(&source_path)?;
-    validate_single_pdf_output_location(&source_path, &requested_output)?;
-
-    let output_path = collision_safe_pdf_output_path(&requested_output)?;
+    let output_path =
+        output_planning::prepare_execution_output(&requested_output, "pdf", &[&source_path])?;
     let platform = current_platform_key();
     let qpdf_path = resolve_qpdf_sidecar_path(platform)?;
     let output_parent = output_path
         .parent()
-        .ok_or_else(|| "Output PDF must have a converted output folder.".to_string())?;
+        .ok_or_else(|| "Output PDF must have a parent folder.".to_string())?;
     let workspace = TaskOutputWorkspace::create(output_parent, control.task_id())?;
     let temp_output = workspace.temp_file("extracted.pdf")?;
     let plan = build_qpdf_extract_arguments_for_output(&source, &pages, &temp_output)?;
@@ -769,14 +780,13 @@ fn execute_qpdf_rotate(
     let pages = normalize_optional_page_ranges(&request.pages)?;
 
     validate_source_pdf_file(&source_path)?;
-    validate_single_pdf_output_location(&source_path, &requested_output)?;
-
-    let output_path = collision_safe_pdf_output_path(&requested_output)?;
+    let output_path =
+        output_planning::prepare_execution_output(&requested_output, "pdf", &[&source_path])?;
     let platform = current_platform_key();
     let qpdf_path = resolve_qpdf_sidecar_path(platform)?;
     let output_parent = output_path
         .parent()
-        .ok_or_else(|| "Output PDF must have a converted output folder.".to_string())?;
+        .ok_or_else(|| "Output PDF must have a parent folder.".to_string())?;
     let workspace = TaskOutputWorkspace::create(output_parent, control.task_id())?;
     let temp_output = workspace.temp_file("rotated.pdf")?;
     let plan = build_qpdf_rotate_arguments_for_output(&source, &temp_output, &degrees, &pages)?;
@@ -947,6 +957,11 @@ where
 }
 
 fn run_qpdf_version_smoke_check(path: &Path) -> Result<String, String> {
+    static SMOKE_CHECK_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    let _guard = SMOKE_CHECK_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| "qpdf startup smoke check lock is unavailable".to_string())?;
     let output = run_command_with_timeout(path, &["--version"], ENGINE_SELF_CHECK_TIMEOUT)
         .map_err(|error| {
             if error.is_timeout() {
@@ -1287,6 +1302,7 @@ fn validate_source_pdf_file(source_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(test)]
 fn validate_merge_output_path(output_path: &Path) -> Result<(), String> {
     if !has_pdf_extension(output_path) {
         return Err(format!(
@@ -1324,78 +1340,7 @@ fn validate_merge_output_path(output_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_split_output_directory(output_directory: &Path) -> Result<(), String> {
-    if output_directory.file_name().and_then(|name| name.to_str()) != Some("converted") {
-        return Err(format!(
-            "Split output directory must be a converted folder: {}",
-            path_to_string(output_directory)
-        ));
-    }
-
-    if output_directory.exists() && !output_directory.is_dir() {
-        return Err(format!(
-            "Converted output path exists but is not a folder: {}",
-            path_to_string(output_directory)
-        ));
-    }
-
-    Ok(())
-}
-
-fn validate_split_output_location(
-    source_path: &Path,
-    output_directory: &Path,
-) -> Result<(), String> {
-    validate_split_output_directory(output_directory)?;
-
-    let source_parent = source_path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .ok_or_else(|| "Source PDF must have a parent folder.".to_string())?;
-    let output_parent = output_directory
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .ok_or_else(|| "Split output directory must have a parent folder.".to_string())?;
-
-    if output_parent != source_parent {
-        return Err(format!(
-            "Split output directory must be the converted folder next to the source PDF: {}",
-            path_to_string(output_directory)
-        ));
-    }
-
-    Ok(())
-}
-
-fn validate_single_pdf_output_location(
-    source_path: &Path,
-    output_path: &Path,
-) -> Result<(), String> {
-    validate_merge_output_path_shape(output_path)?;
-
-    let source_parent = source_path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .ok_or_else(|| "Source PDF must have a parent folder.".to_string())?;
-    let output_parent = output_path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .ok_or_else(|| "Output PDF must have a converted output folder.".to_string())?;
-    let output_grandparent = output_parent
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .ok_or_else(|| "Output PDF converted folder must have a parent folder.".to_string())?;
-
-    if output_grandparent != source_parent {
-        return Err(format!(
-            "Output PDF must be planned inside the converted folder next to the source PDF: {}",
-            path_to_string(output_path)
-        ));
-    }
-
-    Ok(())
-}
-
+#[cfg(test)]
 fn validate_merge_output_path_shape(output_path: &Path) -> Result<(), String> {
     if !has_pdf_extension(output_path) {
         return Err(format!(
@@ -1426,6 +1371,7 @@ fn validate_merge_output_path_shape(output_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(test)]
 fn collision_safe_pdf_output_path(desired_output_path: &Path) -> Result<PathBuf, String> {
     validate_merge_output_path_shape(desired_output_path)?;
 

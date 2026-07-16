@@ -1,3 +1,4 @@
+use crate::{output_finalize::TaskOutputWorkspace, output_planning};
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -115,19 +116,30 @@ pub(crate) fn export_task_report(
 ) -> Result<ExportTaskReportResult, String> {
     validate_request(&request)?;
     let contents = serialize_report(&request)?;
-    let destination = Path::new(request.destination_path.trim());
+    let requested_destination = Path::new(request.destination_path.trim());
+    let destination = output_planning::prepare_execution_output(
+        requested_destination,
+        request.format.extension(),
+        &[],
+    )?;
+    let output_parent = destination
+        .parent()
+        .ok_or_else(|| "报告输出必须有父文件夹。".to_string())?;
+    let workspace = TaskOutputWorkspace::create(
+        output_parent,
+        &format!("report-export-{}", request.generated_at),
+    )?;
+    let temp_output = workspace.temp_file(&format!("report.{}", request.format.extension()))?;
 
-    fs::write(destination, contents.as_bytes())
-        .map_err(|error| report_write_error(destination, error))?;
-    let bytes_written = fs::metadata(destination)
-        .map_err(|error| report_write_error(destination, error))?
-        .len();
+    fs::write(&temp_output, contents.as_bytes())
+        .map_err(|error| report_write_error(&temp_output, error))?;
+    let finalized = workspace.finalize_file(&temp_output, &destination)?;
 
     Ok(ExportTaskReportResult {
         success: true,
         destination_path: destination.to_string_lossy().into_owned(),
         format: request.format.as_str(),
-        bytes_written,
+        bytes_written: finalized.bytes,
         task_count: request.tasks.len(),
         message: "报告已导出",
     })
@@ -276,6 +288,21 @@ fn report_write_error(destination: &Path, error: io::Error) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::{
+        path::PathBuf,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    fn case_dir(name: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "localconvert-report-{name}-{}-{nonce}",
+            std::process::id()
+        ))
+    }
 
     fn task(status: TaskReportStatus, task_id: &str) -> TaskReportRecord {
         TaskReportRecord {
@@ -410,5 +437,34 @@ mod tests {
         for (status, expected) in statuses {
             assert_eq!(task_report_status_name(status), expected);
         }
+    }
+
+    #[test]
+    fn export_uses_atomic_collision_safe_output_and_preserves_existing_file() {
+        let root = case_dir("collision").join("客户 报告");
+        fs::create_dir_all(&root).expect("report directory should be created");
+        let existing = root.join("处理 报告.csv");
+        fs::write(&existing, b"existing report").expect("existing report should be written");
+        let mut report = request(
+            ReportFormat::Csv,
+            vec![task(TaskReportStatus::Success, "success-1")],
+        );
+        report.destination_path = existing.to_string_lossy().into_owned();
+
+        let result = export_task_report(report).expect("report export should succeed");
+        let published = root.join("处理 报告 (1).csv");
+
+        assert_eq!(Path::new(&result.destination_path), published);
+        assert_eq!(fs::read(&existing).unwrap(), b"existing report");
+        assert!(fs::metadata(&published).unwrap().len() > 0);
+        assert!(fs::read_dir(&root).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".localconvert-task-")
+        }));
+
+        fs::remove_dir_all(root.parent().unwrap()).unwrap();
     }
 }

@@ -8,6 +8,8 @@
 
 **当前稳定预览： [Preview 0.7.0](https://github.com/1373878757-ux/localconvert-desktop/releases/tag/preview-0.7.0-preferences-presets-macos)** · macOS Apple Silicon
 
+**当前开发版本：Preview 0.8.0** · 输出位置与安全命名规则；尚未创建发布标签或 Release
+
 [下载与安装](#macos-download-and-install) · [当前功能](#key-features) · [一页作品集简介](docs/portfolio-brief.md) · [项目展示](docs/showcase.md) · [60 秒演示脚本](docs/demo-script.md)
 
 > 当前 DMG 为未签名或 ad-hoc 签名的预览构建，尚未完成 Apple Developer ID 公证。请只从官方 GitHub Releases 页面下载，并在打开前核对 SHA-256。
@@ -50,7 +52,7 @@ LocalConvert Desktop 适合需要处理 PDF 和常见图片、但不希望把文
 
 ## Key Features
 
-Preview 0.7.0 在既有 PDF、图片与报告能力上增加本地偏好与常用预设：
+Preview 0.8.0 开发版本在 Preview 0.7.0 已发布能力上增加输出位置与安全命名规则：
 
 | 功能 | 当前状态 | 说明 |
 | --- | --- | --- |
@@ -68,10 +70,25 @@ Preview 0.7.0 在既有 PDF、图片与报告能力上增加本地偏好与常�
 | 清空任务记录 | 可用 | 二次确认后只清空当前界面记录，不删除任何文件。 |
 | 本地偏好设置 | 可用 | 记住常用工具区、图片参数和报告格式，仅写入 Tauri 应用配置目录。 |
 | 常用处理预设 | 可用 | 五个内置图片预设只填充已有参数，不会自动处理文件。 |
+| 输出位置设置 | 开发中 | 默认保持源文件旁的 `converted` 文件夹，也可选择源文件同级、每次询问或记住的自定义文件夹。 |
+| 输出命名规则 | 开发中 | 支持前缀、操作后缀、自定义后缀与 `{date}`/`{time}`，始终保留正确扩展名并安全处理重名。 |
 
 任务由 Tauri 原生文件选择或拖放导入，真实操作使用本地绝对路径。队列显示等待、处理中、完成、失败和取消状态，并支持安全取消、失败重试、原子输出和防覆盖发布。
 
-偏好设置不会保存任务历史、源文件路径、输出路径、报告路径、文件内容或原始 EXIF/GPS/XMP/IPTC 数据。偏好只保存在本机，不提供云同步或跨设备同步，并可通过“重置偏好设置”恢复安全默认值；重置不会删除任务、源文件、输出文件或报告。
+偏好设置不会保存任务历史、源文件路径、报告路径、文件内容或原始 EXIF/GPS/XMP/IPTC 数据。偏好只保存在本机，不提供云同步或跨设备同步，并可通过“重置偏好设置”恢复安全默认值；重置不会删除任务、源文件、输出文件或报告。
+
+Preview 0.8.0 可将用户明确选择的自定义输出文件夹作为本地偏好保存，并在界面中显示和允许单独清除。除这一项外，偏好仍不保存源文件、任务或报告路径。若记住的文件夹不可用，应用会回退到源文件旁的 `converted` 文件夹并显示非阻塞警告。
+
+### Output Location And Naming Rules
+
+- 默认输出仍写入源文件旁的 `converted` 文件夹，以保持现有安全行为。
+- 可显式选择源文件所在文件夹、每次执行前选择文件夹，或使用记住的自定义输出文件夹。
+- 原文件不会被覆盖。
+- 如遇重名，将自动生成不覆盖的文件名，例如 `report.pdf`、`report (1).pdf`、`report (2).pdf`。
+- 命名规则支持可选前缀，以及沿用当前操作命名、`_converted`、`_resized`、`_compressed`、`_cleaned` 或安全的自定义后缀。
+- 前缀和后缀可使用 `{date}` 与 `{time}`；路径分隔符、控制字符和平台不安全字符会被拒绝。
+- 输出扩展名由实际 PDF、图片或报告格式决定，用户命名规则不能改变它。
+- 重置偏好只恢复输出设置和其他偏好，不删除源文件、输出、报告或任务记录。
 
 ## Supported Conversions
 
@@ -167,6 +184,7 @@ Preview 0.7.0 在既有 PDF、图片与报告能力上增加本地偏好与常�
 | 0.6.0 | 增加 CSV/JSON 批量任务报告导出。 |
 | 0.6.1 | 增加输出/报告定位、精简错误复制、历史清理确认和空状态优化。 |
 | **0.7.0** | 增加纯本地用户偏好、工具区记忆和只填充参数的常用图片预设。 |
+| 0.8.0（开发中） | 增加可控输出位置、本地自定义文件夹偏好与安全文件命名规则。 |
 
 ## Screenshots
 
@@ -365,7 +383,7 @@ Office rendering can differ from the source application's native output. The v1 
 
 ## Development Setup
 
-This repository includes a Tauri v2, React, and TypeScript desktop app for LocalConvert Desktop. The current Preview 0.7.0 implementation includes a Simplified Chinese UI, branded startup splash screen, Tauri-native file selection and drag-and-drop intake, a local task queue, local CSV/JSON task report export, safe local output/report location navigation, concise error-summary copying, confirmed in-memory history cleanup, local-only preferences and five parameter-filling presets, backend output path planning, the bundled macOS Apple Silicon qpdf sidecar, startup engine self-checks, real local PDF merge, split, page extraction, and rotate execution, and real local JPG/JPEG, PNG, and WebP conversion, resizing, same-format compression, and best-effort metadata cleanup through the first-party Rust `image-engine` sidecar. Each startup engine smoke check has a three-second timeout; a failed, timed-out, or panicking check is stored as a local startup error and never prevents the main window from opening after the splash minimum display time. Real qpdf and image-engine jobs run through an asynchronous Rust task registry with task-ID status arbitration, child-process cancellation, task-owned temporary outputs, validated atomic no-overwrite publication, and scoped cleanup. Compression outputs are published only when they are smaller than their source, and metadata cleanup outputs are published only when removable metadata is found. Native desktop intake records validated absolute paths and reads filesystem metadata only; browser-only `File` fallback tasks remain metadata previews and cannot run real conversion operations. Report export writes only the task metadata already held by the UI through a Rust backend command; it does not read source file contents or export raw image metadata. Preferences are stored in the Tauri application config directory without task history, local paths, file contents, raw metadata, credentials, or cloud synchronization. Local navigation validates that a remembered absolute path still exists before revealing it, and clipboard access is write-only for a filtered summary. AVIF, TIFF/TIF, HEIC, GIF, RAW, images-to-PDF, Office conversion, and PDFium rasterization remain disabled until intentionally enabled in later implementation steps.
+This repository includes a Tauri v2, React, and TypeScript desktop app for LocalConvert Desktop. The current Preview 0.8.0 development implementation includes a Simplified Chinese UI, branded startup splash screen, Tauri-native file selection and drag-and-drop intake, a local task queue, local CSV/JSON task report export, safe local output/report location navigation, concise error-summary copying, confirmed in-memory history cleanup, local-only preferences and five parameter-filling presets, user-controlled output location and safe naming rules, the bundled macOS Apple Silicon qpdf sidecar, startup engine self-checks, real local PDF merge, split, page extraction, and rotate execution, and real local JPG/JPEG, PNG, and WebP conversion, resizing, same-format compression, and best-effort metadata cleanup through the first-party Rust `image-engine` sidecar. Each startup engine smoke check has a three-second timeout; a failed, timed-out, or panicking check is stored as a local startup error and never prevents the main window from opening after the splash minimum display time. Real qpdf and image-engine jobs run through an asynchronous Rust task registry with task-ID status arbitration, child-process cancellation, task-owned temporary outputs, validated atomic no-overwrite publication, and scoped cleanup. Compression outputs are published only when they are smaller than their source, and metadata cleanup outputs are published only when removable metadata is found. Native desktop intake records validated absolute paths and reads filesystem metadata only; browser-only `File` fallback tasks remain metadata previews and cannot run real conversion operations. Report export writes only the task metadata already held by the UI through a Rust backend command; it does not read source file contents or export raw image metadata. Preferences are stored in the Tauri application config directory without task history, source or report paths, file contents, raw metadata, credentials, or cloud synchronization; only a custom output folder explicitly chosen by the user may be remembered locally. Local navigation validates that a remembered absolute path still exists before revealing it, and clipboard access is write-only for a filtered summary. AVIF, TIFF/TIF, HEIC, GIF, RAW, images-to-PDF, Office conversion, and PDFium rasterization remain disabled until intentionally enabled in later implementation steps.
 
 Development machines need the normal Tauri v2 toolchain requirements for the target platform, including Node.js, npm, Rust 1.89 or newer, Cargo, and platform-specific build dependencies. Rust 1.89 is required by the pinned WebP encoder used to build the first-party `image-engine` sidecar.
 
