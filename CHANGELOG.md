@@ -2,9 +2,9 @@
 
 ## Unreleased
 
-### Preview 0.8.0 - Output Location And Naming Rules
+## Preview 0.8.0 - 2026-07-17
 
-- Aligned npm, Cargo, Tauri, and in-app version metadata to `0.8.0` for the current development line; the latest public release remains Preview 0.7.0.
+- Released the macOS Apple Silicon prerelease with npm, Cargo, Tauri, and in-app version metadata aligned to `0.8.0`.
 - Added local output location preferences for the existing source-adjacent `converted` folder, the source folder, per-operation folder selection, and an explicitly remembered custom folder.
 - Added safe output prefix and suffix rules, including existing operation names, `_converted`, `_resized`, `_compressed`, `_cleaned`, custom suffixes, and local `{date}` / `{time}` expansion.
 - Centralized output path planning and execution validation in Rust for PDF, image, metadata cleanup, and report tasks while preserving correct extensions, atomic publication, source protection, and collision-safe `(1)` naming.

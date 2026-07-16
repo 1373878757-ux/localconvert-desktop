@@ -6,9 +6,9 @@
 
 面向普通办公用户的纯本地桌面文件转换工具。文件在本机处理，不上传、不依赖服务器、不采集遥测，默认不会覆盖原文件。
 
-**当前稳定预览： [Preview 0.7.0](https://github.com/1373878757-ux/localconvert-desktop/releases/tag/preview-0.7.0-preferences-presets-macos)** · macOS Apple Silicon
+**当前稳定预览： [Preview 0.8.0](https://github.com/1373878757-ux/localconvert-desktop/releases/tag/preview-0.8.0-output-rules-macos)** · macOS Apple Silicon
 
-**当前开发版本：Preview 0.8.0** · 输出位置与安全命名规则；尚未创建发布标签或 Release
+**当前版本：Preview 0.8.0** · 输出位置与安全命名规则
 
 [下载与安装](#macos-download-and-install) · [当前功能](#key-features) · [一页作品集简介](docs/portfolio-brief.md) · [项目展示](docs/showcase.md) · [60 秒演示脚本](docs/demo-script.md)
 
@@ -36,7 +36,7 @@ LocalConvert Desktop 适合需要处理 PDF 和常见图片、但不希望把文
 - 源文件和输出文件不会上传。
 - 转换不依赖托管服务器，也不要求登录。
 - 应用不包含遥测。
-- 原文件不会被覆盖；结果写入源文件旁的 `converted` 文件夹，并自动处理重名。
+- 原文件不会被覆盖；默认结果写入源文件旁的 `converted` 文件夹，也可使用用户明确选择的安全输出位置，并自动处理重名。
 
 ## Product Principles
 
@@ -52,7 +52,7 @@ LocalConvert Desktop 适合需要处理 PDF 和常见图片、但不希望把文
 
 ## Key Features
 
-Preview 0.8.0 开发版本在 Preview 0.7.0 已发布能力上增加输出位置与安全命名规则：
+Preview 0.8.0 在 Preview 0.7.0 已发布能力上增加输出位置与安全命名规则：
 
 | 功能 | 当前状态 | 说明 |
 | --- | --- | --- |
@@ -70,8 +70,8 @@ Preview 0.8.0 开发版本在 Preview 0.7.0 已发布能力上增加输出位置
 | 清空任务记录 | 可用 | 二次确认后只清空当前界面记录，不删除任何文件。 |
 | 本地偏好设置 | 可用 | 记住常用工具区、图片参数和报告格式，仅写入 Tauri 应用配置目录。 |
 | 常用处理预设 | 可用 | 五个内置图片预设只填充已有参数，不会自动处理文件。 |
-| 输出位置设置 | 开发中 | 默认保持源文件旁的 `converted` 文件夹，也可选择源文件同级、每次询问或记住的自定义文件夹。 |
-| 输出命名规则 | 开发中 | 支持前缀、操作后缀、自定义后缀与 `{date}`/`{time}`，始终保留正确扩展名并安全处理重名。 |
+| 输出位置设置 | 可用 | 默认保持源文件旁的 `converted` 文件夹，也可选择源文件同级、每次询问或记住的自定义文件夹。 |
+| 输出命名规则 | 可用 | 支持前缀、操作后缀、自定义后缀与 `{date}`/`{time}`，始终保留正确扩展名并安全处理重名。 |
 
 任务由 Tauri 原生文件选择或拖放导入，真实操作使用本地绝对路径。队列显示等待、处理中、完成、失败和取消状态，并支持安全取消、失败重试、原子输出和防覆盖发布。
 
@@ -114,7 +114,7 @@ Preview 0.8.0 可将用户明确选择的自定义输出文件夹作为本地偏
 - JPEG/WebP 支持的方向元数据会在转换、改尺寸或压缩前固化；需要方向变换的 JPEG 清理会以质量 95 重编码。
 - 图片批次采用 fail-closed：任一任务无原生路径、格式不受支持或参数无效时，整批不会启动。
 - 报告可能包含本地路径，但不包含文件内容或原始 EXIF/GPS/XMP/IPTC 载荷。
-- 成功输出先写入任务专属临时位置，验证后再以无覆盖方式发布到 `converted` 文件夹。
+- 成功输出先写入任务专属临时位置，验证后再以无覆盖方式发布到当前安全输出位置。
 
 格式范围只会在本地引擎、输出验证、取消清理、许可证和打包链路均可靠时扩大。
 
@@ -132,14 +132,14 @@ Preview 0.8.0 可将用户明确选择的自定义输出文件夹作为本地偏
 
 当前公开预览仅面向 macOS Apple Silicon，安装包尚未完成 Developer ID 签名与 Apple 公证，首次打开时可能出现 Gatekeeper 提示。
 
-1. 只从 [Preview 0.7.0 GitHub Release](https://github.com/1373878757-ux/localconvert-desktop/releases/tag/preview-0.7.0-preferences-presets-macos) 下载 DMG，不使用第三方转载文件。
+1. 只从 [Preview 0.8.0 GitHub Release](https://github.com/1373878757-ux/localconvert-desktop/releases/tag/preview-0.8.0-output-rules-macos) 下载 DMG，不使用第三方转载文件。
 2. 在终端计算下载文件的 SHA-256：
 
    ```bash
-   shasum -a 256 "LocalConvert.Desktop_0.7.0_aarch64.dmg"
+   shasum -a 256 "LocalConvert.Desktop_0.8.0_aarch64.dmg"
    ```
 
-   预期结果：`68f2edab5658f66aea1d89b72967640eda04e353d41213377a8f85f35da4be60`
+   预期结果：`9791adbd9ea15fdb2b860a39cae56a419a1d8ff66099b2dc643d4192e17ebaa5`
 
 3. 将结果与上方摘要及 GitHub Release 页面显示的 asset digest 对比；不一致时立即停止，不要打开文件。
 4. 校验通过后挂载 DMG，将 `LocalConvert Desktop.app` 拖入 Applications。
@@ -152,7 +152,7 @@ Preview 0.8.0 可将用户明确选择的自定义输出文件夹作为本地偏
 - 文件在本机处理，转换不上传，也不依赖服务器。
 - 受支持的转换不要求网络连接、账户或云存储。
 - 应用不采集遥测。
-- 原文件不会被覆盖；输出写入源文件旁的 `converted` 文件夹，并使用安全递增命名。
+- 原文件不会被覆盖；默认输出写入源文件旁的 `converted` 文件夹，也可写入用户明确选择的安全位置，并使用安全递增命名。
 - 任务报告可能包含本机文件路径，分享前应先检查。
 - 报告不包含文件内容，也不包含原始 EXIF、GPS、XMP 或 IPTC 载荷。
 - 元数据清理是最佳努力的隐私辅助功能，不是法证级彻底清除；重要文件在分享前仍应自行复核。
@@ -183,8 +183,8 @@ Preview 0.8.0 可将用户明确选择的自定义输出文件夹作为本地偏
 | 0.5.1 | 完善 macOS 安装、Gatekeeper 与 SHA-256 指引。 |
 | 0.6.0 | 增加 CSV/JSON 批量任务报告导出。 |
 | 0.6.1 | 增加输出/报告定位、精简错误复制、历史清理确认和空状态优化。 |
-| **0.7.0** | 增加纯本地用户偏好、工具区记忆和只填充参数的常用图片预设。 |
-| 0.8.0（开发中） | 增加可控输出位置、本地自定义文件夹偏好与安全文件命名规则。 |
+| 0.7.0 | 增加纯本地用户偏好、工具区记忆和只填充参数的常用图片预设。 |
+| **0.8.0** | 增加可控输出位置、本地自定义文件夹偏好与安全文件命名规则。 |
 
 ## Screenshots
 
@@ -218,7 +218,7 @@ Desktop full edition platforms:
 | --- | --- | --- |
 | `windows-x86_64` | Planned v1 | First-priority future Windows build; no public preview is available yet. |
 | `windows-aarch64` | Future | Desktop full edition only when all engine assets are available. |
-| `macos-aarch64` | Current preview | Preview 0.7.0 is available with bundled qpdf and image-engine assets. |
+| `macos-aarch64` | Current preview | Preview 0.8.0 is available with bundled qpdf and image-engine assets. |
 | `macos-x86_64` | Future | Desktop full edition only when all engine assets are available. |
 | `linux-x86_64` | Future | Desktop full edition only when all engine assets are available. |
 
@@ -383,7 +383,7 @@ Office rendering can differ from the source application's native output. The v1 
 
 ## Development Setup
 
-This repository includes a Tauri v2, React, and TypeScript desktop app for LocalConvert Desktop. The current Preview 0.8.0 development implementation includes a Simplified Chinese UI, branded startup splash screen, Tauri-native file selection and drag-and-drop intake, a local task queue, local CSV/JSON task report export, safe local output/report location navigation, concise error-summary copying, confirmed in-memory history cleanup, local-only preferences and five parameter-filling presets, user-controlled output location and safe naming rules, the bundled macOS Apple Silicon qpdf sidecar, startup engine self-checks, real local PDF merge, split, page extraction, and rotate execution, and real local JPG/JPEG, PNG, and WebP conversion, resizing, same-format compression, and best-effort metadata cleanup through the first-party Rust `image-engine` sidecar. Each startup engine smoke check has a three-second timeout; a failed, timed-out, or panicking check is stored as a local startup error and never prevents the main window from opening after the splash minimum display time. Real qpdf and image-engine jobs run through an asynchronous Rust task registry with task-ID status arbitration, child-process cancellation, task-owned temporary outputs, validated atomic no-overwrite publication, and scoped cleanup. Compression outputs are published only when they are smaller than their source, and metadata cleanup outputs are published only when removable metadata is found. Native desktop intake records validated absolute paths and reads filesystem metadata only; browser-only `File` fallback tasks remain metadata previews and cannot run real conversion operations. Report export writes only the task metadata already held by the UI through a Rust backend command; it does not read source file contents or export raw image metadata. Preferences are stored in the Tauri application config directory without task history, source or report paths, file contents, raw metadata, credentials, or cloud synchronization; only a custom output folder explicitly chosen by the user may be remembered locally. Local navigation validates that a remembered absolute path still exists before revealing it, and clipboard access is write-only for a filtered summary. AVIF, TIFF/TIF, HEIC, GIF, RAW, images-to-PDF, Office conversion, and PDFium rasterization remain disabled until intentionally enabled in later implementation steps.
+This repository includes a Tauri v2, React, and TypeScript desktop app for LocalConvert Desktop. The current Preview 0.8.0 release includes a Simplified Chinese UI, branded startup splash screen, Tauri-native file selection and drag-and-drop intake, a local task queue, local CSV/JSON task report export, safe local output/report location navigation, concise error-summary copying, confirmed in-memory history cleanup, local-only preferences and five parameter-filling presets, user-controlled output location and safe naming rules, the bundled macOS Apple Silicon qpdf sidecar, startup engine self-checks, real local PDF merge, split, page extraction, and rotate execution, and real local JPG/JPEG, PNG, and WebP conversion, resizing, same-format compression, and best-effort metadata cleanup through the first-party Rust `image-engine` sidecar. Each startup engine smoke check has a three-second timeout; a failed, timed-out, or panicking check is stored as a local startup error and never prevents the main window from opening after the splash minimum display time. Real qpdf and image-engine jobs run through an asynchronous Rust task registry with task-ID status arbitration, child-process cancellation, task-owned temporary outputs, validated atomic no-overwrite publication, and scoped cleanup. Compression outputs are published only when they are smaller than their source, and metadata cleanup outputs are published only when removable metadata is found. Native desktop intake records validated absolute paths and reads filesystem metadata only; browser-only `File` fallback tasks remain metadata previews and cannot run real conversion operations. Report export writes only the task metadata already held by the UI through a Rust backend command; it does not read source file contents or export raw image metadata. Preferences are stored in the Tauri application config directory without task history, source or report paths, file contents, raw metadata, credentials, or cloud synchronization; only a custom output folder explicitly chosen by the user may be remembered locally. Local navigation validates that a remembered absolute path still exists before revealing it, and clipboard access is write-only for a filtered summary. AVIF, TIFF/TIF, HEIC, GIF, RAW, images-to-PDF, Office conversion, and PDFium rasterization remain disabled until intentionally enabled in later implementation steps.
 
 Development machines need the normal Tauri v2 toolchain requirements for the target platform, including Node.js, npm, Rust 1.89 or newer, Cargo, and platform-specific build dependencies. Rust 1.89 is required by the pinned WebP encoder used to build the first-party `image-engine` sidecar.
 
@@ -411,7 +411,7 @@ npm run tauri build
 
 ### macOS Preview Install Guide
 
-用户安装步骤、Gatekeeper 安全提示和 Preview 0.7.0 SHA-256 命令见前文 [macOS Download and Install](#macos-download-and-install)。发布人员应遵循 [macOS signing and notarization workflow](docs/macos-signing-notarization.md)，且不得将证书、密码或 Apple API 凭据提交到仓库。
+用户安装步骤、Gatekeeper 安全提示和 Preview 0.8.0 SHA-256 命令见前文 [macOS Download and Install](#macos-download-and-install)。发布人员应遵循 [macOS signing and notarization workflow](docs/macos-signing-notarization.md)，且不得将证书、密码或 Apple API 凭据提交到仓库。
 
 Packaging should focus on a complete offline installer:
 

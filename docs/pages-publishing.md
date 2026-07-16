@@ -28,14 +28,14 @@
 - [ ] 页面通过 HTTPS 正常加载。
 - [ ] 页面标题和首屏中的 `LocalConvert Desktop` 正常显示。
 - [ ] `by 田宸宇` 正常显示。
-- [ ] `Preview 0.7.0` 正常显示。
+- [ ] `Preview 0.8.0` 正常显示。
 - [ ] 以下六张真实应用截图均可加载：主工作台、PDF 工具、图片工具、任务结果、报告导出和 About 面板。
 - [ ] GitHub Release 下载链接可打开。
 - [ ] README、项目展示和一页作品集简介链接可打开。
 - [ ] 下载区显示的 SHA-256 为：
 
   ```text
-  68f2edab5658f66aea1d89b72967640eda04e353d41213377a8f85f35da4be60
+  9791adbd9ea15fdb2b860a39cae56a419a1d8ff66099b2dc643d4192e17ebaa5
   ```
 
 - [ ] 移动端页面没有横向溢出。
@@ -45,7 +45,7 @@
 本地 DMG 可使用以下命令复核：
 
 ```bash
-shasum -a 256 "LocalConvert.Desktop_0.7.0_aarch64.dmg"
+shasum -a 256 "LocalConvert.Desktop_0.8.0_aarch64.dmg"
 ```
 
 计算结果必须与上方 SHA-256 以及 GitHub Release 中对应资源的摘要一致。不一致时不要打开文件。
