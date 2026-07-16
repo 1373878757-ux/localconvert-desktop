@@ -6,6 +6,8 @@
 
 LocalConvert Desktop 是一款面向普通办公用户的纯本地桌面文件转换工具。它把 PDF 结构处理、JPG/PNG/WebP 图片转换与处理、批量任务状态和报告导出放在同一个克制的桌面工作台中；文件不上传，不依赖转换服务器，原文件默认不会被覆盖。当前稳定基线为 [Preview 0.6.1](https://github.com/1373878757-ux/localconvert-desktop/releases/tag/preview-0.6.1-task-usability-macos)，公开构建面向 macOS Apple Silicon，尚未完成 Developer ID 签名与 Apple 公证。
 
+面向非技术读者的精简介绍见 [一页作品集简介](portfolio-brief.md)。
+
 ## Product Positioning
 
 - **目标用户**：需要处理常见 PDF 和图片的办公用户、测试人员与重视本地隐私的个人用户。

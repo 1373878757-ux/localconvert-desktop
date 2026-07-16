@@ -8,7 +8,7 @@
 
 **当前稳定预览： [Preview 0.6.1](https://github.com/1373878757-ux/localconvert-desktop/releases/tag/preview-0.6.1-task-usability-macos)** · macOS Apple Silicon
 
-[下载与安装](#macos-download-and-install) · [当前功能](#key-features) · [项目展示](docs/showcase.md) · [60 秒演示脚本](docs/demo-script.md)
+[下载与安装](#macos-download-and-install) · [当前功能](#key-features) · [一页作品集简介](docs/portfolio-brief.md) · [项目展示](docs/showcase.md) · [60 秒演示脚本](docs/demo-script.md)
 
 > 当前 DMG 为未签名或 ad-hoc 签名的预览构建，尚未完成 Apple Developer ID 公证。请只从官方 GitHub Releases 页面下载，并在打开前核对 SHA-256。
 
