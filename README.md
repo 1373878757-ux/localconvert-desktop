@@ -1,105 +1,182 @@
 # LocalConvert Desktop
 
-by 田宸宇
+**by 田宸宇**
 
-Slogan: 让可能发生在这儿。
+> 让可能发生在这儿。
 
-Current development line: **Preview 0.6.1** for macOS Apple Silicon. Preview builds are not yet Developer ID notarized. Download release artifacts only from the [official LocalConvert Desktop GitHub Releases page](https://github.com/1373878757-ux/localconvert-desktop/releases) and verify the published SHA-256 checksum before opening them.
+面向普通办公用户的纯本地桌面文件转换工具。文件在本机处理，不上传、不依赖服务器、不采集遥测，默认不会覆盖原文件。
+
+**当前稳定预览： [Preview 0.6.1](https://github.com/1373878757-ux/localconvert-desktop/releases/tag/preview-0.6.1-task-usability-macos)** · macOS Apple Silicon
+
+[下载与安装](#macos-download-and-install) · [当前功能](#key-features) · [项目展示](docs/showcase.md) · [60 秒演示脚本](docs/demo-script.md)
+
+> 当前 DMG 为未签名或 ad-hoc 签名的预览构建，尚未完成 Apple Developer ID 公证。请只从官方 GitHub Releases 页面下载，并在打开前核对 SHA-256。
 
 ## Project Overview
 
-LocalConvert Desktop is a desktop-first file conversion app for people who want reliable local conversion without sending files to a cloud service.
+LocalConvert Desktop 适合需要处理 PDF 和常见图片、但不希望把文件交给在线转换网站的办公用户。下载安装后，当前已支持 PDF 结构操作、JPG/PNG/WebP 转换与处理，以及 CSV/JSON 任务报告导出。
 
-The app is planned as a Tauri v2 desktop application with a React and TypeScript frontend, Rust backend commands, and bundled sidecar conversion engines. Conversion work runs on the user's machine. The app should not require a server, account, cloud storage, or internet connection to convert supported files after installation.
+应用采用 Tauri v2、React、TypeScript 与 Rust 后端命令，并随安装包内置 qpdf 和第一方 Rust `image-engine` sidecar。受支持的转换不需要账户、云存储、服务器或网络连接。
 
-This README is the source of truth for the project. Before any code is written or changed, update this document first when the intended product behavior, conversion scope, architecture, privacy model, output rules, or build expectations change.
+本 README 是项目事实来源。产品行为、转换范围、架构、隐私模型、输出规则或构建要求发生变化时，应先更新本文档，再修改实现。
 
-The first implementation should focus on a dependable v1 conversion set, clear task status, safe output handling, and predictable local execution rather than broad format coverage.
+当前项目优先保证可靠的本地执行、清晰的任务状态和安全输出，而不是追求宽泛但不稳定的格式覆盖。
 
 ### What This App Does Locally
 
-- Files are processed on the user's Mac by bundled local engines.
-- Source files and outputs are not uploaded.
-- Conversion does not require a hosted server.
-- The app does not include telemetry.
-- Original files are not overwritten; outputs use collision-safe names in a source-adjacent `converted` folder.
+- 文件由安装包内置的本地引擎处理。
+- 源文件和输出文件不会上传。
+- 转换不依赖托管服务器，也不要求登录。
+- 应用不包含遥测。
+- 原文件不会被覆盖；结果写入源文件旁的 `converted` 文件夹，并自动处理重名。
 
 ## Product Principles
 
-- Local by default: files are processed on the user's device.
-- No cloud upload: source files are not uploaded for conversion.
-- No server dependency: conversion does not depend on a hosted backend.
-- Offline conversion: supported conversions should work without internet access after installation.
-- Bundled engines: runtime users should not manually install LibreOffice, qpdf, Poppler, PDFium, image libraries, or other conversion dependencies.
-- Preserve originals: original files are never overwritten by default.
-- Clear outputs: converted files are written to a predictable local folder.
-- Transparent failures: failed tasks should show useful error information without retaining hidden source copies.
-- Safe process execution: sidecar tools are launched with argument arrays, explicit paths, timeouts, and cleanup.
-- README-first development: implementation work must follow this README, and scope changes must be documented here before code changes.
-- Strict local scope: do not implement video conversion, audio conversion, cloud upload, or server-side conversion.
+- **纯本地**：文件始终在用户设备上处理。
+- **无上传**：源文件、输出文件和原始元数据不会发送到云端。
+- **无服务器依赖**：受支持的转换在安装后可离线运行。
+- **内置引擎**：运行时用户不需要手动安装 qpdf 或图片处理依赖。
+- **保护原文件**：默认输出到源文件旁的 `converted` 文件夹，绝不就地覆盖。
+- **失败透明**：失败任务提供可读错误信息，不暗中保留源文件副本。
+- **安全执行**：sidecar 使用明确路径和参数数组启动，并具备超时、取消与清理机制。
+- **README 优先**：范围变化先更新本文档，再进入实现。
+- **范围克制**：不开发视频、音频、云上传或服务端转换。
 
 ## Key Features
 
-- Tauri-native file selection and drag-and-drop intake with real local paths for enabled desktop operations.
-- Batch conversion queue with visible task status.
-- Office-to-PDF conversion for common Office documents.
-- Image format conversion, compression, resizing, and metadata removal.
-- Multiple images combined into a single PDF.
-- PDF merge, split, page extraction, rotation, rasterization, and preview support.
-- Output folder opening from completed tasks.
-- Retry and cancellation for queued or running tasks where safe.
-- Success and failure summaries after batch work.
-- Local CSV and JSON export for completed, failed, cancelled, skipped, not-smaller, and unsupported task results.
-- Finder navigation for published outputs and the last successfully exported report.
-- Concise error-summary copying without source contents or raw metadata payloads.
-- Confirmed in-memory task-history cleanup that never deletes source files, outputs, reports, logs, or temporary directories.
-- Failure logs that capture command context and engine output without copying or retaining source files.
+Preview 0.6.1 当前提供以下能力：
+
+| 功能 | 当前状态 | 说明 |
+| --- | --- | --- |
+| PDF 合并 | 可用 | 合并两个或更多本地 PDF。 |
+| PDF 拆分 | 可用 | 将多页 PDF 拆分为独立输出。 |
+| PDF 旋转 | 可用 | 支持左转 90°、右转 90° 和 180°。 |
+| PDF 页面提取 | 可用 | 支持 `1,3,5-7` 等页面范围。 |
+| JPG/PNG/WebP 转换 | 可用 | 支持 JPG/JPEG、PNG、WebP 之间的已启用方向。 |
+| JPG/PNG/WebP 改尺寸 | 可用 | 等比缩放，支持适应范围、仅宽度、仅高度，默认不放大。 |
+| JPEG/WebP/PNG 压缩 | 可用 | JPEG/WebP 质量压缩，PNG 无损优化；未变小时不发布输出。 |
+| JPG/PNG/WebP 元数据清理 | 可用 | 尽力移除常见隐私元数据，不宣称法证级清理。 |
+| CSV/JSON 报告导出 | 可用 | 导出任务状态与结果元数据，不包含文件内容。 |
+| 打开输出/报告位置 | 可用 | 在 Finder 中定位已发布输出或最近导出的报告。 |
+| 复制错误摘要 | 可用 | 仅复制精简的人类可读错误，不复制原始元数据载荷。 |
+| 清空任务记录 | 可用 | 二次确认后只清空当前界面记录，不删除任何文件。 |
+
+任务由 Tauri 原生文件选择或拖放导入，真实操作使用本地绝对路径。队列显示等待、处理中、完成、失败和取消状态，并支持安全取消、失败重试、原子输出和防覆盖发布。
 
 ## Supported Conversions
 
-The v1 scope should prioritize these conversion groups:
+### Supported Formats
 
-| Category | Supported operations |
+| 类别 | 当前格式 | 当前操作 |
+| --- | --- | --- |
+| PDF 工具 | PDF | 合并、拆分、旋转、页面提取 |
+| 图片格式转换 | JPG/JPEG、PNG、WebP | JPG/JPEG → PNG/WebP；PNG → JPG/WebP；WebP → JPG/PNG |
+| 图片改尺寸 | JPG/JPEG、PNG、WebP | 适应最大宽高、仅宽度、仅高度，始终保持宽高比 |
+| 图片压缩 | JPG/JPEG、PNG、WebP | JPEG/WebP 质量压缩；PNG 无损优化 |
+| 元数据清理 | JPG/JPEG、PNG、WebP | 尽力移除常见 EXIF/GPS/XMP/IPTC、PNG 文本/时间和 WebP 元数据块 |
+| 任务报告 | CSV、JSON | 导出任务状态、路径、时间、体积和结果摘要 |
+
+### Current Behavior
+
+- 真实任务必须来自 Tauri 原生本地路径；浏览器 `File` 仅用于元数据预览。
+- PDF 操作由内置 qpdf 执行；图片操作由第一方 Rust `image-engine` 执行。
+- 图片改尺寸支持适应范围、仅宽度和仅高度，默认不放大；单边上限为 16,384 像素，结果上限为 64,000,000 像素。
+- JPEG 质量范围为 40–95，默认 82；WebP 质量范围为 40–95，默认 80；PNG 只做无损优化。
+- 压缩结果未小于源文件时不发布新文件，并报告 `压缩后未变小，未生成新文件`。
+- 元数据清理保持源格式；未发现可清理内容时不发布新文件，并报告 `未发现可清理的元数据，未生成新文件`。
+- JPEG/WebP 支持的方向元数据会在转换、改尺寸或压缩前固化；需要方向变换的 JPEG 清理会以质量 95 重编码。
+- 图片批次采用 fail-closed：任一任务无原生路径、格式不受支持或参数无效时，整批不会启动。
+- 报告可能包含本地路径，但不包含文件内容或原始 EXIF/GPS/XMP/IPTC 载荷。
+- 成功输出先写入任务专属临时位置，验证后再以无覆盖方式发布到 `converted` 文件夹。
+
+格式范围只会在本地引擎、输出验证、取消清理、许可证和打包链路均可靠时扩大。
+
+## Not Yet Supported
+
+- HEIC 转换、改尺寸、压缩、元数据清理及方向处理。
+- GIF、TIFF/TIF、RAW 图片处理。
+- DOC/DOCX、PPT/PPTX、XLS/XLSX 等 Office 文档转换。
+- 多图合成 PDF、PDF 预览和 PDF 转图片。
+- Windows x64 公开预览构建。
+- Intel macOS 构建。
+- 视频和音频转换不在当前产品目标内。
+
+## macOS Download and Install
+
+当前公开预览仅面向 macOS Apple Silicon，安装包尚未完成 Developer ID 签名与 Apple 公证，首次打开时可能出现 Gatekeeper 提示。
+
+1. 只从 [Preview 0.6.1 GitHub Release](https://github.com/1373878757-ux/localconvert-desktop/releases/tag/preview-0.6.1-task-usability-macos) 下载 DMG，不使用第三方转载文件。
+2. 在终端计算下载文件的 SHA-256：
+
+   ```bash
+   shasum -a 256 "LocalConvert.Desktop_0.6.1_aarch64.dmg"
+   ```
+
+3. 将结果与 GitHub Release 页面显示的 asset digest 对比；不一致时立即停止，不要打开文件。
+4. 校验通过后挂载 DMG，将 `LocalConvert Desktop.app` 拖入 Applications。
+5. 如果 Gatekeeper 因开发者身份无法验证而阻止打开，可在 Finder 中按住 Control 点击该应用，选择 **打开**，再次核对提示后只为这个已校验应用确认打开。
+
+不要全局关闭 Gatekeeper，也不要对来源不明的应用移除隔离属性。项目的发布签名准备见 [macOS signing and notarization workflow](docs/macos-signing-notarization.md)。
+
+## Privacy and Safety
+
+- 文件在本机处理，转换不上传，也不依赖服务器。
+- 受支持的转换不要求网络连接、账户或云存储。
+- 应用不采集遥测。
+- 原文件不会被覆盖；输出写入源文件旁的 `converted` 文件夹，并使用安全递增命名。
+- 任务报告可能包含本机文件路径，分享前应先检查。
+- 报告不包含文件内容，也不包含原始 EXIF、GPS、XMP 或 IPTC 载荷。
+- 元数据清理是最佳努力的隐私辅助功能，不是法证级彻底清除；重要文件在分享前仍应自行复核。
+- 失败、超时和取消只清理任务自有临时文件，不删除任意最终输出或源文件。
+
+## Technical Stack
+
+| 层级 | 技术与职责 |
 | --- | --- |
-| Office to PDF | Convert DOC, DOCX, PPT, PPTX, XLS, XLSX, ODT, ODS, and ODP files to PDF using LibreOffice headless mode. |
-| Images | Convert common image formats, apply compression presets, resize images, and remove EXIF metadata. |
-| Images to PDF | Combine multiple images into one PDF in user-selected order. |
-| PDF structure | Merge PDFs, split PDFs, extract page ranges, and rotate pages. |
-| PDF rasterization | Convert PDF pages to images and generate previews. |
+| 桌面外壳 | Tauri v2：窗口、原生文件入口、打包与 sidecar 管理 |
+| 前端 | React + TypeScript：中文 UI、拖放、任务队列、结果和报告交互 |
+| 后端 | Rust Tauri commands：路径校验、后台任务、取消、超时、日志与原子输出 |
+| PDF 引擎 | 内置 qpdf sidecar：合并、拆分、旋转、页面提取 |
+| 图片引擎 | 第一方 Rust `image-engine` sidecar：转换、改尺寸、压缩、元数据清理 |
+| 资产验证 | manifest 驱动的 SHA-256、可执行权限和许可证构建门禁 |
 
-Format support should be expanded only when the local engine path, output validation, and packaging story are reliable.
+前端不会直接调用转换二进制；所有真实文件操作都经过 Rust 后端命令和参数数组边界。
 
-Preview 0.3 keeps the Preview 0.2 local image conversion matrix and adds local image resizing for JPG/JPEG, PNG, and WebP on macOS Apple Silicon. Resize supports fitting within maximum width and height, width-only resizing with automatic height, and height-only resizing with automatic width. Aspect ratio is always preserved, the output keeps the source format and extension, and smaller images are never upscaled. When requested bounds are larger than the source, the engine writes a collision-safe output at the original oriented pixel dimensions and reports that no resize was required. Requested dimensions are limited to 16,384 pixels per edge and the resulting image is limited to 64,000,000 pixels.
+## Release Timeline
 
-Preview 0.4 adds local same-format image compression and size optimization for JPG/JPEG, PNG, and WebP on macOS Apple Silicon. JPEG accepts quality values from 40 through 95 and defaults to 82. WebP accepts quality values from 40 through 95 and defaults to 80. PNG uses lossless optimization only and has no lossy quality control. Compression always keeps the source format and extension, applies supported orientation metadata before encoding, and proposes a collision-safe filename containing `compressed`, such as `report compressed.jpg`. If the task-owned encoded result is not smaller than the source file, the backend does not publish a final output and reports `压缩后未变小，未生成新文件`. This preview does not guarantee that every source can be made smaller.
+| 版本 | 里程碑 |
+| --- | --- |
+| 0.1.x | 建立 qpdf PDF 工具、可靠本地执行与输出安全基础。 |
+| 0.2.0 | 增加 JPG/PNG/WebP 图片格式转换。 |
+| 0.3.0 | 增加保持宽高比的图片改尺寸。 |
+| 0.4.0 | 增加 JPEG/WebP 质量压缩与 PNG 无损优化。 |
+| 0.5.0 | 增加 JPG/PNG/WebP 元数据隐私清理。 |
+| 0.5.1 | 完善 macOS 安装、Gatekeeper 与 SHA-256 指引。 |
+| 0.6.0 | 增加 CSV/JSON 批量任务报告导出。 |
+| **0.6.1** | 增加输出/报告定位、精简错误复制、历史清理确认和空状态优化。 |
 
-Preview 0.5 adds local metadata and privacy cleanup for JPG/JPEG, PNG, and WebP on macOS Apple Silicon. The first-party engine removes common EXIF, GPS, camera/device, XMP, IPTC, PNG text, and WebP EXIF/XMP container metadata where supported while preserving the source format and visual dimensions. PNG and WebP cleanup, and JPEG cleanup when no orientation transform is required, operate at the container level so encoded pixel payloads are preserved. A JPEG that relies on EXIF orientation is first normalized visually and then re-encoded at JPEG quality 95 before the stale orientation metadata is removed; this necessary JPEG path may change compressed pixel bytes slightly. Cleaned outputs use collision-safe names containing `cleaned`, such as `report cleaned.jpg`. If no removable metadata is found, the backend publishes no final output and reports `未发现可清理的元数据，未生成新文件`. This is a best-effort privacy tool, not forensic-grade sanitization, and users should verify important files before sharing.
+## Screenshots
 
-Preview 0.6 adds fully local batch task report export for task results already held by the app. Users can choose UTF-8 CSV or pretty-printed JSON and save through the native desktop save dialog. Reports contain task identifiers, operation and result status, local source and output paths, timestamps, available byte savings, and user-facing result summaries. They never contain source file contents or raw EXIF, GPS, XMP, IPTC, or other image metadata payloads. Because reports may contain sensitive local file paths, users should review them before sharing. Cancelling the save dialog does not alter task status or clear task history.
+真实产品截图**待补充**。当前仓库不提交虚构或占位截图；计划补充以下小尺寸 PNG：
 
-Preview 0.6.1 improves task-result usability without changing conversion or report serialization. Successful tasks with a published output can reveal that local file in the system file manager. After a successful CSV or JSON export, the app remembers that report path for the current session and can reveal it as well; cancelling the save dialog does not replace the remembered path. Failed, unsupported, and skipped results can copy one concise human-readable summary through a write-only clipboard boundary that excludes file contents and raw EXIF, GPS, XMP, or IPTC payloads. “Clear history” requires confirmation and clears only in-memory task records and selections; it never deletes source files, output files, reports, logs, or temporary directories.
+- `docs/assets/screenshots/main-window.png`
+- `docs/assets/screenshots/pdf-tools.png`
+- `docs/assets/screenshots/image-tools.png`
+- `docs/assets/screenshots/report-export.png`
 
-A first-party Rust `image-engine` sidecar performs conversion, resizing, compression, and metadata cleanup locally and is enabled only after its startup version and self-check validation pass. Real operations require Tauri-native local paths; browser-only `File` tasks remain metadata previews. Image batches fail closed when any selected item has no native path, uses an unsupported format, has invalid dimensions or quality, is cancelled, or is already running. The Rust backend validates requests, creates the source-adjacent `converted` folder only at execution time, refuses overwrites, launches the sidecar with argument arrays, captures diagnostics, and validates the output before reporting success. JPEG and WebP orientation metadata exposed by the current decoder is applied to pixel data before conversion, resizing, or compression, and stale orientation metadata is not copied to the output. AVIF, TIFF/TIF, HEIC, GIF, and RAW remain disabled for metadata cleanup; images-to-PDF is not enabled yet. The current engine does not decode HEIC or apply HEIC orientation metadata.
-
-### Current Preview Limitations
-
-- The current bundled preview is for macOS Apple Silicon only.
-- Preview artifacts are unsigned or ad-hoc signed and are not yet Developer ID notarized.
-- HEIC conversion, resizing, compression, metadata cleanup, and orientation handling are not enabled.
-- GIF, TIFF, and RAW metadata cleanup are not enabled.
-- Metadata cleanup is best effort and is not forensic-grade sanitization.
+录制或截图建议见 [项目展示文档](docs/showcase.md) 与 [60 秒演示脚本](docs/demo-script.md)。
 
 ## Platform Matrix
 
-LocalConvert Desktop should support a full desktop platform matrix at the architecture level, but v1 delivery only enables platforms whose bundled engine assets are available and verified.
+LocalConvert Desktop 保留完整桌面平台矩阵的架构方向，但当前只发布已具备完整、可验证引擎资产的 macOS Apple Silicon 预览构建。
 
 Desktop full edition platforms:
 
 | Platform key | Status | Notes |
 | --- | --- | --- |
-| `windows-x86_64` | v1 enabled | First-priority Windows x64 desktop build. |
+| `windows-x86_64` | Planned v1 | First-priority future Windows build; no public preview is available yet. |
 | `windows-aarch64` | Future | Desktop full edition only when all engine assets are available. |
-| `macos-aarch64` | v1 enabled | Second-priority macOS Apple Silicon desktop build. |
+| `macos-aarch64` | Current preview | Preview 0.6.1 is available with bundled qpdf and image-engine assets. |
 | `macos-x86_64` | Future | Desktop full edition only when all engine assets are available. |
 | `linux-x86_64` | Future | Desktop full edition only when all engine assets are available. |
 
@@ -114,7 +191,7 @@ The full bundled engine edition is desktop-only. Android and iOS are future lite
 
 ## Architecture
 
-LocalConvert Desktop should use a layered desktop architecture:
+LocalConvert Desktop 对当前已启用操作采用以下分层桌面架构，并为后续本地引擎保留相同边界：
 
 1. The React and TypeScript frontend manages file selection, queue display, options, progress, cancellation, retry, summaries, and output-folder actions.
 2. Tauri v2 exposes Rust backend commands for validated conversion requests and filesystem operations.
@@ -125,16 +202,16 @@ The frontend should not directly shell out to conversion tools. It should call T
 
 ## Bundled Conversion Engines
 
-Runtime installers should include the conversion engines required for the supported v1 feature set.
+当前公开安装包只内置已经启用并通过资产校验的 qpdf 与第一方 `image-engine`。LibreOffice 和 PDFium 保留为未来桌面完整版方向，在真实运行时、许可证和打包链路完成前不会对用户宣称可用。
 
-| Engine | Responsibility | Minimum v1 asset types |
-| --- | --- | --- |
-| LibreOffice headless | Office-to-PDF conversion for DOC, DOCX, PPT, PPTX, XLS, XLSX, ODT, ODS, and ODP. | `sidecar`, `runtime-folder` |
-| qpdf | PDF structure operations such as merge, split, page extraction, and rotation. | `sidecar` |
-| PDFium | PDF rasterization, page-to-image conversion, thumbnails, and previews. | `library` |
-| image-engine | Image conversion, compression, resizing, and best-effort metadata/privacy cleanup. | `sidecar` |
+| Engine | Status | Responsibility | Asset types |
+| --- | --- | --- | --- |
+| qpdf | Current | PDF merge, split, page extraction, and rotation. | `sidecar` |
+| image-engine | Current | Image conversion, compression, resizing, and best-effort metadata/privacy cleanup. | `sidecar` |
+| LibreOffice headless | Planned | Future Office-to-PDF conversion for DOC, DOCX, PPT, PPTX, XLS, XLSX, ODT, ODS, and ODP. | `sidecar`, `runtime-folder` |
+| PDFium | Planned | Future PDF rasterization, page-to-image conversion, thumbnails, and previews. | `library` |
 
-The exact packaging layout can vary by platform, but the app should resolve engines from its own bundled resources instead of expecting users to install command-line tools manually.
+The exact packaging layout can vary by platform, but enabled operations must resolve engines from the app's own bundled resources instead of expecting users to install command-line tools manually.
 
 Engine asset structure:
 
@@ -156,7 +233,7 @@ Asset placement rules:
 - Fonts go under `src-tauri/resources/fonts/`.
 - Licenses and third-party notices go under `src-tauri/resources/licenses/`.
 - Each engine asset must be recorded in `src-tauri/engine-manifest.json` with `name`, `version`, `platform`, `type`, `source`, `sha256`, `license`, and `destination`.
-- v1 release packaging must fail clearly when required engine assets for `windows-x86_64` or `macos-aarch64` are missing.
+- A release build must fail clearly when required engine assets for its enabled target platform are missing. The current public profile requires `macos-aarch64`; `windows-x86_64` remains planned.
 - Future desktop platforms remain disabled until all required engine assets are present and verified.
 - Mobile lite platforms must not include the full bundled desktop engine set.
 
@@ -290,22 +367,7 @@ npm run tauri build
 
 ### macOS Preview Install Guide
 
-The current downloadable preview is built for Apple Silicon Macs. It is not yet signed and notarized with an Apple Developer ID, so macOS may show a Gatekeeper warning on first launch.
-
-1. Download the DMG only from the [official GitHub Releases page](https://github.com/1373878757-ux/localconvert-desktop/releases). Do not use DMGs re-hosted by third parties.
-2. Compare the downloaded file with the SHA-256 value printed on that release page:
-
-   ```bash
-   shasum -a 256 "/path/to/LocalConvert Desktop_<version>_aarch64.dmg"
-   ```
-
-3. Stop if the checksum differs or the download source is uncertain. Do not open that file.
-4. Mount the verified DMG and drag `LocalConvert Desktop.app` to Applications.
-5. Try opening the app normally. If Gatekeeper blocks this verified preview because its developer cannot be checked, close the warning, then Control-click the app in Finder, choose **Open**, review the warning, and choose **Open** only for that exact verified app. macOS may instead offer **Open Anyway** under **System Settings > Privacy & Security** after the blocked attempt.
-
-Do not disable Gatekeeper globally, run commands that remove quarantine recursively, or approve an app whose source and checksum have not been verified. Future public builds should follow the detailed [macOS signing and notarization workflow](docs/macos-signing-notarization.md).
-
-Unsigned local development and test builds remain supported. Developer ID signing and Apple notarization are opt-in release steps supplied through the local Keychain and environment variables; no signing credentials belong in this repository. Follow the [macOS signing and notarization workflow](docs/macos-signing-notarization.md) before distributing a macOS DMG outside the Mac App Store.
+用户安装步骤、Gatekeeper 安全提示和 Preview 0.6.1 SHA-256 命令见前文 [macOS Download and Install](#macos-download-and-install)。发布人员应遵循 [macOS signing and notarization workflow](docs/macos-signing-notarization.md)，且不得将证书、密码或 Apple API 凭据提交到仓库。
 
 Packaging should focus on a complete offline installer:
 
@@ -468,14 +530,13 @@ Path handling:
 
 ## Roadmap
 
-- Implement the v1 local conversion queue and default output rules.
-- Add reliable Office-to-PDF conversion with isolated LibreOffice execution.
-- Expand the current image conversion, resize, compression, and metadata cleanup preview with images-to-PDF and carefully verified additional formats.
-- Add PDF merge, split, extraction, rotation, rasterization, and previews.
-- Add detailed per-task logs and batch summaries.
-- Add cross-platform packaging with bundled sidecar engines.
-- Add clean-install and offline release validation.
-- Expand supported formats only after the bundled local engine path is proven reliable.
+- 继续加固现有 PDF、图片与任务报告流程，并推进 macOS Developer ID 签名和公证。
+- 为 Windows x64 准备可验证的 qpdf、image-engine、许可证与安装包资产，再发布首个 Windows 预览版。
+- 仅在 LibreOffice 运行时、中文字体、隔离 profile、超时和打包验证完整后启用 Office 转 PDF。
+- 在 PDFium 本地资产和页面验证链路可靠后增加 PDF 预览与 PDF 转图片。
+- 在排序、页面尺寸和原子输出规则完整后增加多图合成 PDF。
+- 只在解码、方向、内存上限、许可证和跨平台资产均经过验证后扩展图片格式。
+- 持续执行干净安装、离线、取消、防覆盖、许可证和资产摘要验证。
 
 ## Non-Goals
 
