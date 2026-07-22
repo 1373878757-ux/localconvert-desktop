@@ -20,6 +20,9 @@ mod task_report;
 mod task_usability;
 mod timed_process;
 
+#[cfg(feature = "simulated-users")]
+pub mod simulated_users;
+
 const MIN_SPLASH_DISPLAY_TIME: Duration = Duration::from_millis(1800);
 
 #[derive(Clone, Serialize)]

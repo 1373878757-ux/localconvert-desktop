@@ -30,6 +30,10 @@ tmp/
 temp/
 .cache/
 
+# Simulated-user generated work and retained reproductions
+reports/simulated-users/.work/
+reports/simulated-users/reproductions/
+
 # Apple signing and notarization secrets/artifacts
 .env
 .env.*

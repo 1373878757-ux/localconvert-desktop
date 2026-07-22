@@ -222,7 +222,7 @@ fn preferences_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         .map_err(|error| format!("无法定位本机偏好设置目录：{error}"))
 }
 
-fn load_preferences_from_path(path: &Path) -> PreferencesLoadResult {
+pub(crate) fn load_preferences_from_path(path: &Path) -> PreferencesLoadResult {
     if !path.exists() {
         return PreferencesLoadResult {
             preferences: UserPreferences::default(),
@@ -273,7 +273,7 @@ fn load_preferences_from_path(path: &Path) -> PreferencesLoadResult {
     }
 }
 
-fn save_preferences_to_path(
+pub(crate) fn save_preferences_to_path(
     path: &Path,
     preferences: UserPreferences,
 ) -> Result<PreferencesMutationResult, String> {
@@ -315,7 +315,7 @@ fn save_preferences_to_path(
     })
 }
 
-fn reset_preferences_at_path(path: &Path) -> Result<PreferencesMutationResult, String> {
+pub(crate) fn reset_preferences_at_path(path: &Path) -> Result<PreferencesMutationResult, String> {
     if path.exists() {
         fs::remove_file(path).map_err(|error| format!("无法重置偏好设置：{error}"))?;
     }

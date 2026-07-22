@@ -1,0 +1,340 @@
+{
+  "schemaVersion": 1,
+  "evidenceType": "deterministic simulated-user workload; not real-user evidence",
+  "generatedAt": "2026-07-22T17:16:30.295Z",
+  "campaigns": {
+    "quick": {
+      "schemaVersion": 1,
+      "evidenceType": "deterministic simulated local desktop workload",
+      "profile": "quick",
+      "seed": "0x4c43443039300001",
+      "gitCommit": "a59640c38e0bf064dcabd01de7a9217f89d55571",
+      "appVersion": "0.9.0",
+      "startedAt": "2026-07-22T17:16:09Z",
+      "finishedAt": "2026-07-22T17:16:30Z",
+      "macosVersion": "26.5.2",
+      "architecture": "aarch64",
+      "virtualSessions": 20,
+      "taskAttempts": 300,
+      "concurrency": [
+        1,
+        2,
+        4
+      ],
+      "personaDistribution": {
+        "batch-image": 1,
+        "beginner": 2,
+        "careless": 2,
+        "external-drive-like": 2,
+        "long-session": 2,
+        "pdf": 2,
+        "permission-failure": 3,
+        "power": 2,
+        "privacy-focused": 2,
+        "unicode-path": 2
+      },
+      "operationDistribution": {
+        "image-clean-metadata": 35,
+        "image-compress": 38,
+        "image-convert": 70,
+        "image-resize": 33,
+        "pdf-extract": 23,
+        "pdf-merge": 25,
+        "pdf-rotate": 37,
+        "pdf-split": 39
+      },
+      "statusDistribution": {
+        "cancelled": 7,
+        "failed": 10,
+        "not_smaller": 6,
+        "skipped": 13,
+        "success": 261,
+        "unsupported": 3
+      },
+      "retryCount": 5,
+      "cancellationCount": 7,
+      "collisionCount": 20,
+      "reportExports": 40,
+      "durationMs": 21212,
+      "throughputTasksPerSecond": 14.14268415740382,
+      "averageTaskDurationMs": 98.44666666666667,
+      "p50TaskDurationMs": 107,
+      "p95TaskDurationMs": 121,
+      "p99TaskDurationMs": 123,
+      "sourceHashChanges": 0,
+      "outputOverwriteViolations": 0,
+      "temporaryDirectoryLeaks": 0,
+      "crashes": 0,
+      "hangs": 0,
+      "timeouts": 0,
+      "invariantViolations": [],
+      "failures": [],
+      "resourceObservations": {
+        "method": "ps/lsof/pgrep/df/memory_pressure sampling every 500ms",
+        "rssStartKib": 12032,
+        "rssEndKib": 15872,
+        "peakRssKib": 16432,
+        "peakCpuPercent": 32.1,
+        "peakOpenFileDescriptors": 10,
+        "peakChildProcesses": null,
+        "peakTemporaryBytes": 1213533,
+        "minimumFreeDiskKib": 15437836,
+        "minimumMemoryFreePercent": 51
+      },
+      "networkObservation": "network inspection is recorded separately during packaged-app smoke testing",
+      "unresolvedLimitations": [
+        "Disk-full behavior is boundary-tested only; the real disk is never filled.",
+        "GUI native picker automation is verified separately and is not multiplied per virtual session.",
+        "Simulated sessions are not evidence of real production-user scale."
+      ],
+      "corpusCleanup": "removed after reporting",
+      "rerunCommand": "npm run test:simulated-users:quick -- --seed 0x4c43443039300001 --sessions 20 --attempts 300 --concurrency 1,2,4",
+      "verdict": "pass"
+    },
+    "standard": {
+      "schemaVersion": 1,
+      "evidenceType": "deterministic simulated local desktop workload",
+      "profile": "standard",
+      "seed": "0x4c43443039300002",
+      "gitCommit": "a59640c38e0bf064dcabd01de7a9217f89d55571",
+      "appVersion": "0.9.0",
+      "startedAt": "2026-07-22T16:12:04Z",
+      "finishedAt": "2026-07-22T16:25:33Z",
+      "macosVersion": "26.5.2",
+      "architecture": "aarch64",
+      "virtualSessions": 100,
+      "taskAttempts": 4000,
+      "concurrency": [
+        1,
+        2,
+        4,
+        8
+      ],
+      "personaDistribution": {
+        "batch-image": 19,
+        "beginner": 13,
+        "careless": 10,
+        "external-drive-like": 9,
+        "long-session": 3,
+        "pdf": 18,
+        "permission-failure": 5,
+        "power": 6,
+        "privacy-focused": 10,
+        "unicode-path": 7
+      },
+      "operationDistribution": {
+        "image-clean-metadata": 418,
+        "image-compress": 598,
+        "image-convert": 985,
+        "image-resize": 616,
+        "pdf-extract": 349,
+        "pdf-merge": 411,
+        "pdf-rotate": 329,
+        "pdf-split": 294
+      },
+      "statusDistribution": {
+        "cancelled": 79,
+        "failed": 105,
+        "not_smaller": 97,
+        "skipped": 145,
+        "success": 3539,
+        "unsupported": 35
+      },
+      "retryCount": 77,
+      "cancellationCount": 79,
+      "collisionCount": 300,
+      "reportExports": 600,
+      "durationMs": 210899,
+      "throughputTasksPerSecond": 18.966365961730624,
+      "averageTaskDurationMs": 101.42675,
+      "p50TaskDurationMs": 109,
+      "p95TaskDurationMs": 121,
+      "p99TaskDurationMs": 134,
+      "sourceHashChanges": 0,
+      "outputOverwriteViolations": 0,
+      "temporaryDirectoryLeaks": 0,
+      "crashes": 0,
+      "hangs": 0,
+      "timeouts": 0,
+      "invariantViolations": [],
+      "failures": [],
+      "resourceObservations": {
+        "method": "ps/lsof/pgrep/df/memory_pressure sampling every 500ms",
+        "rssStartKib": 12016,
+        "rssEndKib": 16160,
+        "peakRssKib": 17408,
+        "peakCpuPercent": 109.6,
+        "peakOpenFileDescriptors": 14,
+        "peakChildProcesses": null,
+        "peakTemporaryBytes": 3890954,
+        "minimumFreeDiskKib": 15661020,
+        "minimumMemoryFreePercent": 45
+      },
+      "networkObservation": "network inspection is recorded separately during packaged-app smoke testing",
+      "unresolvedLimitations": [
+        "Disk-full behavior is boundary-tested only; the real disk is never filled.",
+        "GUI native picker automation is verified separately and is not multiplied per virtual session.",
+        "Simulated sessions are not evidence of real production-user scale."
+      ],
+      "corpusCleanup": "removed after reporting",
+      "rerunCommand": "npm run test:simulated-users:standard -- --seed 0x4c43443039300002 --sessions 100 --attempts 4000 --concurrency 1,2,4,8",
+      "verdict": "pass"
+    }
+  },
+  "coldLaunches": [
+    {
+      "launch": 1,
+      "durationMs": 2502,
+      "splashSeen": true,
+      "mainWindow": true,
+      "qpdfAvailable": true,
+      "imageEngineAvailable": true,
+      "preferencesLoaded": true,
+      "emptySessionHistory": true,
+      "unexpectedStartupError": false
+    },
+    {
+      "launch": 2,
+      "durationMs": 2349,
+      "splashSeen": true,
+      "mainWindow": true,
+      "qpdfAvailable": true,
+      "imageEngineAvailable": true,
+      "preferencesLoaded": true,
+      "emptySessionHistory": true,
+      "unexpectedStartupError": false
+    },
+    {
+      "launch": 3,
+      "durationMs": 2419,
+      "splashSeen": true,
+      "mainWindow": true,
+      "qpdfAvailable": true,
+      "imageEngineAvailable": true,
+      "preferencesLoaded": true,
+      "emptySessionHistory": true,
+      "unexpectedStartupError": false
+    },
+    {
+      "launch": 4,
+      "durationMs": 2447,
+      "splashSeen": true,
+      "mainWindow": true,
+      "qpdfAvailable": true,
+      "imageEngineAvailable": true,
+      "preferencesLoaded": true,
+      "emptySessionHistory": true,
+      "unexpectedStartupError": false
+    },
+    {
+      "launch": 5,
+      "durationMs": 2339,
+      "splashSeen": true,
+      "mainWindow": true,
+      "qpdfAvailable": true,
+      "imageEngineAvailable": true,
+      "preferencesLoaded": true,
+      "emptySessionHistory": true,
+      "unexpectedStartupError": false
+    },
+    {
+      "launch": 6,
+      "durationMs": 2357,
+      "splashSeen": true,
+      "mainWindow": true,
+      "qpdfAvailable": true,
+      "imageEngineAvailable": true,
+      "preferencesLoaded": true,
+      "emptySessionHistory": true,
+      "unexpectedStartupError": false
+    },
+    {
+      "launch": 7,
+      "durationMs": 2383,
+      "splashSeen": true,
+      "mainWindow": true,
+      "qpdfAvailable": true,
+      "imageEngineAvailable": true,
+      "preferencesLoaded": true,
+      "emptySessionHistory": true,
+      "unexpectedStartupError": false
+    },
+    {
+      "launch": 8,
+      "durationMs": 2348,
+      "splashSeen": true,
+      "mainWindow": true,
+      "qpdfAvailable": true,
+      "imageEngineAvailable": true,
+      "preferencesLoaded": true,
+      "emptySessionHistory": true,
+      "unexpectedStartupError": false
+    },
+    {
+      "launch": 9,
+      "durationMs": 2301,
+      "splashSeen": true,
+      "mainWindow": true,
+      "qpdfAvailable": true,
+      "imageEngineAvailable": true,
+      "preferencesLoaded": true,
+      "emptySessionHistory": true,
+      "unexpectedStartupError": false
+    },
+    {
+      "launch": 10,
+      "durationMs": 2328,
+      "splashSeen": true,
+      "mainWindow": true,
+      "qpdfAvailable": true,
+      "imageEngineAvailable": true,
+      "preferencesLoaded": true,
+      "emptySessionHistory": true,
+      "unexpectedStartupError": false
+    }
+  ],
+  "guiSmoke": [
+    {
+      "check": "native file picker",
+      "result": "pass",
+      "note": "A public synthetic showcase image was selected through the native macOS picker and entered the queue as a native-path task."
+    },
+    {
+      "check": "packaged image conversion",
+      "result": "pass",
+      "note": "One PNG-to-WebP task completed through the packaged image-engine; the UI showed its output and no error."
+    },
+    {
+      "check": "source integrity",
+      "result": "pass",
+      "note": "The selected source retained SHA-256 c812ac6fcc7bfb261f297132c3900ab37b5276d4f0b5408b42b0b0ca94b1a6a6."
+    },
+    {
+      "check": "task temporary cleanup",
+      "result": "pass",
+      "note": "No .localconvert-task-* directory or orphan qpdf/image-engine process remained after the operation."
+    },
+    {
+      "check": "packaged-app network",
+      "result": "pass",
+      "note": "lsof reported no TCP or UDP endpoint for the packaged application during the local operation"
+    },
+    {
+      "check": "GUI matrix scope",
+      "result": "limited by design",
+      "note": "Only a native-picker and image-conversion main path were repeated in GUI; the 4,300-task Rust campaigns cover the full operation mix."
+    }
+  ],
+  "deferredProfiles": [
+    {
+      "profile": "stress",
+      "reason": "Deferred until at least 20 GiB free disk space is available and --allow-stress is explicit.",
+      "command": "npm run test:simulated-users:stress -- --allow-stress --seed 0x4c43443039300003"
+    },
+    {
+      "profile": "soak",
+      "reason": "Deferred until at least 20 GiB free disk space is available and --allow-soak is explicit.",
+      "command": "npm run test:simulated-users:soak -- --allow-soak --duration-minutes 120 --seed 0x4c43443039300004"
+    }
+  ]
+}

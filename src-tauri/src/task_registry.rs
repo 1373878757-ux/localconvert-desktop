@@ -305,6 +305,15 @@ impl TaskControl {
         self.entry.cancel_requested.load(Ordering::SeqCst)
     }
 
+    #[cfg(feature = "simulated-users")]
+    pub(crate) fn has_attached_child(&self) -> Result<bool, String> {
+        self.entry
+            .child
+            .lock()
+            .map(|child| child.is_some())
+            .map_err(|_| "Backend child-process lock is unavailable.".to_string())
+    }
+
     pub(crate) fn commit_outputs<T, F>(&self, finalize: F) -> Result<T, TaskCommitError>
     where
         F: FnOnce() -> Result<T, String>,

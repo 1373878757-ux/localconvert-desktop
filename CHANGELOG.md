@@ -11,6 +11,7 @@
 - Added confirmed cleanup for all terminal task records while preserving running tasks, source files, outputs, reports, cancellation, and atomic publication behavior.
 - Added current-filter CSV/JSON report export using the existing report schema and serialization path.
 - Kept the task queue session-scoped and added no engine, format, platform, upload, cloud, server, telemetry, or network capability.
+- Added a deterministic, opt-in simulated-user stability harness for synthetic PDF/image workloads, task-state actions, output conflicts, cancellation, source-integrity checks, compact redacted reports, and limited packaged-app smoke testing. This changes no conversion behavior, engine asset, application version, Tauri permission, or public release metadata.
 
 ## Preview 0.8.0 - 2026-07-17
 

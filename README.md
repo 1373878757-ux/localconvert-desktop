@@ -87,6 +87,8 @@ Preview 0.8.0 可将用户明确选择的自定义输出文件夹作为本地偏
 
 Preview 0.9.0 的任务队列历史仍只存在当前应用会话，不写入偏好文件或磁盘历史。失败重试会保留旧记录、创建新任务 ID，并使用失败任务原有的处理参数；输出位置与命名会重新经过当前安全输出规则，因此不会覆盖原文件或已有输出。源文件已经不存在时，新重试记录会以清晰中文错误结束，不启动 sidecar。
 
+Preview 0.9.0 还包含开发者使用的确定性模拟用户稳定性测试工具。它把“很多用户”解释为隔离的虚拟会话、合成文件、随机但可由 seed 复现的操作序列和受控并发，不会打开大量 GUI 窗口，也不代表真实生产用户证据。测试只使用系统临时目录中的合成 PDF/JPG/PNG/WebP，复用正式输出规划、任务注册、sidecar 执行、取消、原子发布、偏好和报告代码，并在通过后清理语料。
+
 ### Output Location And Naming Rules
 
 - 默认输出仍写入源文件旁的 `converted` 文件夹，以保持现有安全行为。
@@ -409,6 +411,29 @@ npm run tauri dev
 ```
 
 Runtime users should not run these commands and should not install conversion engines manually. They should install the packaged desktop app, which includes the required sidecar engines.
+
+### Simulated User Stability Testing
+
+The simulated-user harness is isolated under `scripts/simulated-users/` and keeps generated corpora outside the repository. Every run records its deterministic seed and prints an exact rerun command when a scenario fails.
+
+```bash
+npm run test:simulated-users:quick
+npm run test:simulated-users:standard
+```
+
+- `quick`: 20 virtual sessions and 300 real backend task attempts at concurrency 1, 2, and 4.
+- `standard`: 100 virtual sessions and 4,000 real backend task attempts at concurrency 1, 2, 4, and 8.
+- `stress`: up to 20,000 attempts and requires both `--allow-stress` and at least 20 GiB free disk space.
+- `soak`: repeated workload waves and requires both `--allow-soak` and at least 20 GiB free disk space.
+
+Stress and soak are intentionally not safe defaults:
+
+```bash
+npm run test:simulated-users:stress -- --allow-stress --seed 0x4c43443039300003
+npm run test:simulated-users:soak -- --allow-soak --duration-minutes 120 --seed 0x4c43443039300004
+```
+
+Use `--dry-run` to inspect a profile without creating files or starting engines. The harness aborts if free space drops below 10 GiB, generated data exceeds its configured cap, memory pressure becomes critical, or repeated crashes/timeouts occur. Full usage, report interpretation, and limitations are documented in [Simulated User Testing](docs/simulated-user-testing.md).
 
 ## Build and Packaging
 

@@ -7,6 +7,10 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "test": "vitest run",
+    "test:simulated-users:quick": "node scripts/simulated-users/run.mjs --profile quick",
+    "test:simulated-users:standard": "node scripts/simulated-users/run.mjs --profile standard",
+    "test:simulated-users:stress": "node scripts/simulated-users/run.mjs --profile stress",
+    "test:simulated-users:soak": "node scripts/simulated-users/run.mjs --profile soak",
     "tauri": "tauri"
   },
   "dependencies": {
